@@ -1,0 +1,38 @@
+# Mizan .gitignore
+
+# Node
+node_modules/
+dist/
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Quantization artefacts (huge)
+chatbot/llama.cpp/
+chatbot/mizan-merged/
+chatbot/*.gguf
+# the GGUF model downloaded from HF at runtime
+models/
+chatbot/results/huggingface_tokenizers_cache/
+chatbot/results/unsloth_compiled_cache/
+chatbot/results/outputs/
+
+# Frontend build
+frontend/build/
+
+# Local dev/test artefacts (not for public repo)
+.pytest_cache/
+.ruff_cache/
+test_reports/
+test_result.md
+memory/
+design_guidelines.json
+.emergent/
+
+# Logs
+*.log
+.DS_Store

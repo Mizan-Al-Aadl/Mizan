@@ -1,0 +1,101 @@
+@import url("https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Cairo:wght@300;400;600;700;800&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root,
+.App {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Cairo", system-ui, -apple-system, sans-serif;
+  background-color: #f9f6f0;
+  color: #111827;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-amiri {
+  font-family: "Amiri", serif;
+}
+.font-cairo {
+  font-family: "Cairo", sans-serif;
+}
+
+@layer base {
+  :root {
+    --background: 42 40% 95%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 159 67% 18%;
+    --primary-foreground: 42 40% 95%;
+    --secondary: 40 25% 88%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 40 25% 88%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 43 89% 38%;
+    --accent-foreground: 42 40% 95%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 42 40% 95%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 159 67% 18%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Subtle scrollbars */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(15, 76, 58, 0.2);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Typing dots animation */
+@keyframes mizan-dot {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+.typing-dot {
+  animation: mizan-dot 1.2s infinite ease-in-out both;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* Fade-in for messages */
+@keyframes mizan-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: mizan-fade-in 0.35s ease-out both;
+}
+
+/* RTL aware: ensure inputs use natural Arabic alignment */
+[dir="rtl"] textarea,
+[dir="rtl"] input {
+  text-align: right;
+}
