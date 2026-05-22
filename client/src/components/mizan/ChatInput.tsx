@@ -43,15 +43,15 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   return (
     <div data-testid="chat-input-container" className="sticky bottom-0 pt-6 pb-3">
       {error && (
-        <p className="text-red-500 text-xs font-cairo mb-1 text-right px-1">
+        <p className="text-error text-xs font-cairo mb-1 text-right px-1">
           {error}
         </p>
       )}
       <div
         className={`
-          flex items-end bg-white border rounded-2xl p-2 shadow-sm
-          transition-all focus-within:ring-2 focus-within:ring-mizan-green/20
-          ${error ? "border-red-400" : "border-black/10 focus-within:border-mizan-green"}
+          flex items-end bg-base-100 border rounded-2xl p-2 shadow-sm
+          transition-all focus-within:ring-2 focus-within:ring-primary/20
+          ${error ? "border-error" : "border-base-300 focus-within:border-primary"}
         `}
       >
         <textarea
@@ -70,7 +70,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           data-testid="send-btn"
           onClick={submit}
           disabled={disabled || !value.trim()}
-          className="p-3 bg-mizan-green text-white rounded-xl hover:bg-mizan-green-dark transition-colors self-end m-1 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="btn btn-primary btn-sm p-3 rounded-xl self-end m-1 flex-shrink-0 disabled:opacity-40"
           aria-label="إرسال"
         >
           {disabled ? (

@@ -36,22 +36,22 @@ export default function Sidebar({
           ${mobileOpen ? "translate-x-0" : "translate-x-[-100%] md:translate-x-0"}
           fixed md:static top-0 right-0 z-50 md:z-auto
           h-full w-72 md:w-80
-          bg-mizan-sidebar border-l border-black/5
+          bg-base-200 border-l border-base-300
           flex flex-col
           transition-transform duration-300 ease-out
         `}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-black/5">
+        <div className="flex items-center justify-between p-4 border-b border-base-300">
           <div className="flex items-center gap-2">
-            <Scale className="w-6 h-6 text-mizan-green" />
-            <span className="font-amiri text-3xl font-bold text-mizan-green leading-none">
+            <Scale className="w-6 h-6 text-primary" />
+            <span className="font-amiri text-3xl font-bold text-primary leading-none">
               ميزان
             </span>
           </div>
           <button
             data-testid="close-sidebar-btn"
-            className="md:hidden p-2 rounded-lg hover:bg-black/5"
+            className="md:hidden btn btn-ghost btn-sm btn-square"
             onClick={onCloseMobile}
             aria-label="إغلاق القائمة"
           >
@@ -64,7 +64,7 @@ export default function Sidebar({
           <button
             data-testid="new-chat-btn"
             onClick={onNew}
-            className="w-full bg-mizan-green text-white rounded-xl px-4 py-3 font-semibold hover:bg-mizan-green-dark transition-colors flex items-center justify-center gap-2 font-cairo shadow-sm"
+            className="btn btn-primary w-full rounded-xl font-cairo shadow-sm"
           >
             <Plus className="w-4 h-4" />
             محادثة جديدة
@@ -73,11 +73,11 @@ export default function Sidebar({
 
         {/* Chat list */}
         <div className="px-2 pb-4 flex-1 overflow-y-auto">
-          <p className="px-3 py-2 text-xs uppercase tracking-wider text-gray-500 font-cairo">
+          <p className="px-3 py-2 text-xs uppercase tracking-wider text-base-content/50 font-cairo">
             المحادثات السابقة
           </p>
           {chats.length === 0 ? (
-            <p className="px-3 py-4 text-sm text-gray-500 font-cairo">
+            <p className="px-3 py-4 text-sm text-base-content/50 font-cairo">
               لا توجد محادثات بعد.
             </p>
           ) : (
@@ -92,8 +92,8 @@ export default function Sidebar({
                     transition-colors font-cairo
                     ${
                       activeId === c.id
-                        ? "bg-mizan-green/10 text-mizan-green"
-                        : "hover:bg-black/5 text-gray-800"
+                        ? "bg-primary/10 text-primary"
+                        : "hover:bg-base-300 text-base-content"
                     }
                   `}
                 >
@@ -105,10 +105,10 @@ export default function Sidebar({
                       e.stopPropagation();
                       onDelete(c.id);
                     }}
-                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-black/10 transition-opacity"
+                    className="btn btn-ghost btn-xs btn-square opacity-0 group-hover:opacity-100"
                     aria-label="حذف المحادثة"
                   >
-                    <Trash2 className="w-4 h-4 text-gray-600" />
+                    <Trash2 className="w-4 h-4 text-base-content/60" />
                   </button>
                 </li>
               ))}
@@ -117,7 +117,7 @@ export default function Sidebar({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-black/5 text-xs text-gray-500 font-cairo">
+        <div className="p-4 border-t border-base-300 text-xs text-base-content/50 font-cairo">
           مساعد قانوني لبناني — قيد التطوير.
         </div>
       </aside>

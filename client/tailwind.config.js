@@ -7,15 +7,6 @@ export default {
         cairo: ["Cairo", "sans-serif"],
         amiri: ["Amiri", "serif"],
       },
-      colors: {
-        mizan: {
-          green: "#0F4C3A",
-          "green-dark": "#0A3326",
-          gold: "#B8860B",
-          bg: "#F9F6F0",
-          sidebar: "#EBE6D9",
-        },
-      },
       keyframes: {
         "fade-in": {
           from: { opacity: "0", transform: "translateY(6px)" },
@@ -32,5 +23,22 @@ export default {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [require("tailwindcss-animate"), require("daisyui")],
+  daisyui: {
+    themes: [
+      {
+        mizan: {
+          "primary": "#0F4C3A",        
+          "primary-content": "#F9F6F0",
+          "secondary": "#B8860B",     
+          "secondary-content": "#F9F6F0",
+          "accent": "#0A3326",       
+          "neutral": "#EBE6D9",         
+          "base-100": "#F9F6F0",     
+          "base-200": "#EBE6D9",
+          "base-300": "#D9D3C4",
+        },
+      },
+    ],
+  },
 };

@@ -27,8 +27,8 @@ export default function MessageBubble({
       <div
         className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
           isUser
-            ? "bg-mizan-green text-white"
-            : "bg-mizan-gold/10 text-mizan-gold border border-mizan-gold/30"
+            ? "bg-primary text-primary-content"
+            : "bg-secondary/10 text-secondary border border-secondary/30"
         }`}
       >
         {isUser ? (
@@ -45,8 +45,8 @@ export default function MessageBubble({
           max-w-[85%] sm:max-w-[75%] p-4 sm:p-5 shadow-sm
           ${
             isUser
-              ? "bg-mizan-green text-white rounded-2xl rounded-tr-none"
-              : "bg-white text-gray-900 border border-black/5 rounded-2xl rounded-tl-none"
+              ? "bg-primary text-primary-content rounded-2xl rounded-tr-none"
+              : "bg-base-100 text-base-content border border-base-200 rounded-2xl rounded-tl-none"
           }
         `}
       >
@@ -55,7 +55,7 @@ export default function MessageBubble({
         {/* Streaming cursor */}
         {streaming && (
           <span
-            className="inline-block w-2 h-4 align-middle bg-mizan-gold ml-1 animate-pulse"
+            className="inline-block w-2 h-4 align-middle bg-secondary ml-1 animate-pulse"
             aria-hidden
           />
         )}
@@ -64,7 +64,7 @@ export default function MessageBubble({
         {!isUser && source && !streaming && (
           <div
             data-testid={`source-${source}`}
-            className="mt-3 pt-2 border-t border-black/5 flex items-center gap-1.5 text-[11px] font-cairo text-gray-400"
+            className="mt-3 pt-2 border-t border-base-200 flex items-center gap-1.5 text-[11px] font-cairo text-base-content/40"
           >
             <Bot className="w-3 h-3" />
             {"نموذج Mizan المحلي"}
