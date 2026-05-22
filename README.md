@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Mizan — Lebanese Legal Assistant (ميزان)
 
 > An Arabic chatbot specialized in **Lebanese law** and **international cases**, with conversation memory, document drafting (statements, contracts, pleadings), token-by-token streaming, and an optional **CPU-quantized** local LLM mode using a fine-tuned Llama-3 8B LoRA.
@@ -131,3 +132,6 @@ Then set `CHATBOT_LOCAL_URL=http://localhost:8009` in `backend/.env` and call `/
 ## Disclaimer
 
 Mizan is an educational/assistive tool. Its output **does not constitute official legal advice** and should not be relied upon for any binding legal decision. Always consult a licensed Lebanese attorney for specific cases.
+=======
+# Mizan
+>>>>>>> e835640d266ede031f83ed6bec1fff9d69ab80d8
