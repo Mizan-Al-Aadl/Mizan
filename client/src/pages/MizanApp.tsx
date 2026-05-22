@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Plus,
@@ -65,11 +65,6 @@ export default function MizanApp() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const skipNextLoadRef = useRef(false);
-
-  const activeChat = useMemo(
-    () => chats.find((c) => c.id === activeId) ?? null,
-    [chats, activeId]
-  );
 
   // ── Data fetchers ──
   const refreshChats = async (): Promise<Chat[]> => {

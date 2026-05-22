@@ -37,7 +37,7 @@ export const listChats = (): Promise<Chat[]> =>
 export const createChat = (title?: string): Promise<Chat> =>
   apiFetch("/chats", ChatSchema, {
     method: "POST",
-    body: JSON.stringify({ title: title ?? null }),
+    body: JSON.stringify(title ? { title } : {}),
   });
 
 export const deleteChat = (id: string): Promise<{ ok: boolean }> =>
