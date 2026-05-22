@@ -20,20 +20,24 @@ from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+# `emergentintegrations` is used only for the Claude Sonnet fallback.
+# Import it lazily inside `_call_claude` so the package is optional.
 
 # ---------- Setup ----------
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
-
-MONGO_URL = os.environ["MONGO_URL"]
-DB_NAME = os.environ["DB_NAME"]
+MONGO_URL = os.environ.get("MONGO_URL") or "mongodb://localhost:27017"
+DB_NAME = os.environ.get("DB_NAME", "mizan")
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
 # ---- Fine-tuned local model (your Hugging Face GGUF) ----
 # When USE_FINETUNED=true, the backend loads the GGUF on first request and uses
-# it instead of Claude. Set to "false" (or leave the file missing) to fall back.
-USE_FINETUNED = os.environ.get("USE_FINETUNED", "false").lower() == "true"
+# it as the default model. This is enabled by default so the chatbot uses your
+# Hugging Face model unless you explicitly turn it off.
+USE_FINETUNED = os.environ.get("USE_FINETUNED", "true").lower() == "true"
+
+# Keep Claude as an explicit opt-in escape hatch only.
+ALLOW_CLAUDE_FALLBACK = os.environ.get("ALLOW_CLAUDE_FALLBACK", "false").lower() == "true"
 FINETUNED_MODEL_PATH = os.environ.get(
     "FINETUNED_MODEL_PATH", "/app/models/llama-3-8b-instruct.Q4_K_M.gguf"
 )
@@ -270,6 +274,14 @@ async def _stream_claude(session_id: str, history: List[dict]) -> AsyncGenerator
 
 async def _call_claude(session_id: str, history: List[dict]) -> str:
     """Call Claude Sonnet 4.5 via emergentintegrations. History is a list of {role, content}."""
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception:
+        raise HTTPException(
+            500,
+            "Claude integration unavailable: install 'emergentintegrations' or enable a different LLM (set `USE_FINETUNED` or configure `CHATBOT_LOCAL_URL`).",
+        )
+
     if not EMERGENT_LLM_KEY:
         raise HTTPException(500, "EMERGENT_LLM_KEY missing in backend/.env")
 
@@ -385,7 +397,7 @@ async def send_message(body: SendMessageBody):
     #   1. External CHATBOT_LOCAL_URL (if configured and use_local=true)
     #   2. In-process fine-tuned GGUF (your Hugging Face model) if use_finetuned=true
     #      OR USE_FINETUNED env flag is true (server-wide default)
-    #   3. Claude Sonnet 4.5 fallback (so the site never goes down)
+    #   3. Claude Sonnet 4.5 only if ALLOW_CLAUDE_FALLBACK=true
     reply_text: Optional[str] = None
     source = "claude"
 
@@ -400,13 +412,19 @@ async def send_message(body: SendMessageBody):
             source = "finetuned"
 
     if reply_text is None:
-        try:
-            reply_text = await _call_claude(body.chat_id, history)
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.exception("LLM error")
-            raise HTTPException(500, f"LLM error: {e}")
+        if ALLOW_CLAUDE_FALLBACK:
+            try:
+                reply_text = await _call_claude(body.chat_id, history)
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.exception("LLM error")
+                raise HTTPException(500, f"LLM error: {e}")
+        else:
+            raise HTTPException(
+                503,
+                "Fine-tuned model unavailable. Enable ALLOW_CLAUDE_FALLBACK=true only if you want Claude as a backup.",
+            )
 
     # Persist assistant message
     ai_msg = Message(
@@ -460,8 +478,13 @@ async def send_message_stream(body: SendMessageBody):
         try:
             if use_finetuned_now:
                 gen = _stream_finetuned(history)
-            else:
+            elif ALLOW_CLAUDE_FALLBACK:
                 gen = _stream_claude(body.chat_id, history)
+            else:
+                raise HTTPException(
+                    503,
+                    "Fine-tuned model unavailable. Enable ALLOW_CLAUDE_FALLBACK=true only if you want Claude as a backup.",
+                )
 
             async for token in gen:
                 full_chunks.append(token)
