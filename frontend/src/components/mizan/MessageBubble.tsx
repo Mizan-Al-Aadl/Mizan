@@ -67,7 +67,7 @@ export default function MessageBubble({
             className="mt-3 pt-2 border-t border-black/5 flex items-center gap-1.5 text-[11px] font-cairo text-gray-400"
           >
             <Bot className="w-3 h-3" />
-            {source === "local" ? "نموذج Mizan المحلي" : "Claude Sonnet"}
+            {"نموذج Mizan المحلي"}
           </div>
         )}
       </div>

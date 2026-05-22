@@ -180,7 +180,6 @@ export default function MizanApp() {
       sendMessageStream(
         chatId!,
         content,
-        {},
         {
           onToken: (chunk) => {
             acc += chunk;
@@ -282,7 +281,6 @@ export default function MizanApp() {
                     role="assistant"
                     content={streamingText}
                     streaming
-                    source="claude"
                   />
                 )}
                 {sending && !streamingText && <TypingIndicator />}

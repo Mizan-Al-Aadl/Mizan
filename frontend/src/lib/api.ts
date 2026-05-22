@@ -59,7 +59,6 @@ export interface StreamCallbacks {
 export function sendMessageStream(
   chatId: string,
   content: string,
-  opts: { use_local?: boolean },
   callbacks: StreamCallbacks
 ): AbortController {
   const controller = new AbortController();
@@ -72,7 +71,6 @@ export function sendMessageStream(
         body: JSON.stringify({
           chat_id: chatId,
           content,
-          use_local: opts.use_local ?? false,
         }),
         signal: controller.signal,
       });

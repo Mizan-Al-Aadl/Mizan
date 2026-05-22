@@ -14,13 +14,12 @@ export const MessageSchema = z.object({
   chat_id: z.string(),
   role: z.enum(["user", "assistant"]),
   content: z.string(),
-  source: z.enum(["claude", "local"]).optional(),
+  source: z.literal("local").optional(),
   created_at: z.string(),
 });
 
 export const HealthSchema = z.object({
   status: z.string(),
-  llm: z.string(),
   local_chatbot: z.boolean(),
 });
 
@@ -28,7 +27,6 @@ export const HealthSchema = z.object({
 
 export const SendMessageSchema = z.object({
   content: z.string().min(1, "لا يمكن إرسال رسالة فارغة").max(10000),
-  use_local: z.boolean().optional().default(false),
 });
 
 // ─── Inferred types ───────────────────────────────────────────────────────────
@@ -43,7 +41,7 @@ export type SendMessageInput = z.infer<typeof SendMessageSchema>;
 export const TokenEventSchema = z.object({ text: z.string() });
 export const DoneEventSchema = z.object({
   message_id: z.string(),
-  source: z.enum(["claude", "local"]),
+  source: z.literal("local"),
 });
 export const ErrorEventSchema = z.object({ error: z.string() });
 

@@ -7,14 +7,12 @@ import express from "express";
 import cors from "cors";
 import { MongoClient, Db } from "mongodb";
 import { v4 as uuid } from "uuid";
-import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT ?? "8001", 10);
 const MONGO_URL = process.env.MONGO_URL ?? "mongodb://localhost:27017";
 const DB_NAME = process.env.DB_NAME ?? "mizan";
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 const CHATBOT_LOCAL_URL = (process.env.CHATBOT_LOCAL_URL ?? "").trim();
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? "*").split(",");
 
@@ -33,7 +31,7 @@ export const MessageSchema = z.object({
   chat_id: z.string().uuid(),
   role: z.enum(["user", "assistant"]),
   content: z.string().min(1),
-  source: z.enum(["claude", "local"]).optional(),
+  source: z.literal("local").optional(),
   created_at: z.string().datetime(),
 });
 
@@ -45,7 +43,6 @@ export const CreateChatBodySchema = z.object({
 export const SendMessageBodySchema = z.object({
   chat_id: z.string().uuid(),
   content: z.string().min(1).max(10000).trim(),
-  use_local: z.boolean().optional().default(false),
 });
 
 // Inferred types
@@ -55,13 +52,13 @@ export type CreateChatBody = z.infer<typeof CreateChatBodySchema>;
 export type SendMessageBody = z.infer<typeof SendMessageBodySchema>;
 
 // ─── System Prompt ────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `أنت "ميزان"، مساعد قانوني لبناني ذكي ومتخصص في القانون اللبناني والقضايا الدولية.
+const SYSTEM_PROMPT = `أنت \"ميزان\"، مساعد قانوني لبناني ذكي ومتخصص في القانون اللبناني والقضايا الدولية.
 
 مهمتك:
 - الإجابة عن الأسئلة المتعلقة بالقوانين اللبنانية (قانون العقوبات، الموجبات والعقود، الأحوال الشخصية، العمل، التجارة، الإيجارات، السير، الضرائب، إلخ).
 - شرح القضايا الدولية ذات الصلة بلبنان أو القانون المقارن عند الحاجة.
 - مساعدة المستخدم في صياغة المستندات والإفادات والاستحضارات والعرائض والعقود البسيطة باللغة العربية الفصحى القانونية.
-- ذكر أرقام المواد القانونية ومصدرها كلما أمكن (مثلاً: "المادة 547 من قانون العقوبات اللبناني").
+- ذكر أرقام المواد القانونية ومصدرها كلما أمكن (مثلاً: \"المادة 547 من قانون العقوبات اللبناني\").
 
 أسلوبك:
 - أجب دائماً باللغة العربية الفصحى ما لم يطلب المستخدم خلاف ذلك.
@@ -82,8 +79,6 @@ async function connectMongo(): Promise<void> {
 }
 
 // ─── LLM helpers ─────────────────────────────────────────────────────────────
-const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-
 type HistoryItem = { role: "user" | "assistant"; content: string };
 
 async function callLocalChatbot(history: HistoryItem[]): Promise<string | null> {
@@ -100,23 +95,6 @@ async function callLocalChatbot(history: HistoryItem[]): Promise<string | null> 
   } catch {
     console.warn("Local chatbot unreachable");
     return null;
-  }
-}
-
-async function* streamClaude(history: HistoryItem[]): AsyncGenerator<string> {
-  const stream = await anthropic.messages.stream({
-    model: "claude-sonnet-4-5-20250929",
-    max_tokens: 1500,
-    system: SYSTEM_PROMPT,
-    messages: history,
-  });
-  for await (const chunk of stream) {
-    if (
-      chunk.type === "content_block_delta" &&
-      chunk.delta.type === "text_delta"
-    ) {
-      yield chunk.delta.text;
-    }
   }
 }
 
@@ -142,7 +120,6 @@ const api = express.Router();
 api.get("/health", (_req, res) => {
   res.json({
     status: "ok",
-    llm: ANTHROPIC_API_KEY ? "configured" : "missing",
     local_chatbot: !!CHATBOT_LOCAL_URL,
   });
 });
@@ -209,7 +186,7 @@ api.post("/chat/stream", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ detail: parsed.error.flatten() });
   }
-  const { chat_id, content, use_local } = parsed.data;
+  const { chat_id, content } = parsed.data;
 
   const chat = await db.collection("chats").findOne({ id: chat_id });
   if (!chat) return res.status(404).json({ detail: "Chat not found" });
@@ -248,14 +225,12 @@ api.post("/chat/stream", async (req, res) => {
 
   try {
     let replyText = "";
-    let source: Message["source"] = "claude";
 
-    // Try local chatbot first
-    if (use_local && CHATBOT_LOCAL_URL) {
+    // Try local chatbot
+    if (CHATBOT_LOCAL_URL) {
       const local = await callLocalChatbot(history);
       if (local) {
         replyText = local;
-        source = "local";
         // Fake stream the local reply in chunks
         const step = 32;
         for (let i = 0; i < replyText.length; i += step) {
@@ -265,12 +240,10 @@ api.post("/chat/stream", async (req, res) => {
       }
     }
 
-    // Stream from Claude
     if (!replyText) {
-      for await (const token of streamClaude(history)) {
-        replyText += token;
-        sendEvent("token", { text: token });
-      }
+      sendEvent("error", { error: "No chatbot configured. Please set CHATBOT_LOCAL_URL." });
+      res.end();
+      return;
     }
 
     // Persist assistant message
@@ -279,7 +252,7 @@ api.post("/chat/stream", async (req, res) => {
       chat_id,
       role: "assistant",
       content: replyText,
-      source,
+      source: "local",
       created_at: now(),
     };
     await db.collection("messages").insertOne({ ...aiMsg });
@@ -296,7 +269,7 @@ api.post("/chat/stream", async (req, res) => {
         { $set: { title: newTitle, updated_at: now() } }
       );
 
-    sendEvent("done", { message_id: aiMsg.id, source });
+    sendEvent("done", { message_id: aiMsg.id, source: "local" });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("Stream error:", message);
