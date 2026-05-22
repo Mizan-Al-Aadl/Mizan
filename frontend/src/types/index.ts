@@ -1,0 +1,52 @@
+import { z } from "zod";
+
+// ─── Domain schemas ───────────────────────────────────────────────────────────
+
+export const ChatSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const MessageSchema = z.object({
+  id: z.string(),
+  chat_id: z.string(),
+  role: z.enum(["user", "assistant"]),
+  content: z.string(),
+  source: z.enum(["claude", "local"]).optional(),
+  created_at: z.string(),
+});
+
+export const HealthSchema = z.object({
+  status: z.string(),
+  llm: z.string(),
+  local_chatbot: z.boolean(),
+});
+
+// ─── Request schemas ──────────────────────────────────────────────────────────
+
+export const SendMessageSchema = z.object({
+  content: z.string().min(1, "لا يمكن إرسال رسالة فارغة").max(10000),
+  use_local: z.boolean().optional().default(false),
+});
+
+// ─── Inferred types ───────────────────────────────────────────────────────────
+
+export type Chat = z.infer<typeof ChatSchema>;
+export type Message = z.infer<typeof MessageSchema>;
+export type Health = z.infer<typeof HealthSchema>;
+export type SendMessageInput = z.infer<typeof SendMessageSchema>;
+
+// ─── SSE event payloads ───────────────────────────────────────────────────────
+
+export const TokenEventSchema = z.object({ text: z.string() });
+export const DoneEventSchema = z.object({
+  message_id: z.string(),
+  source: z.enum(["claude", "local"]),
+});
+export const ErrorEventSchema = z.object({ error: z.string() });
+
+export type TokenEvent = z.infer<typeof TokenEventSchema>;
+export type DoneEvent = z.infer<typeof DoneEventSchema>;
+export type ErrorEvent = z.infer<typeof ErrorEventSchema>;
