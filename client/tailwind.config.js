@@ -28,13 +28,13 @@ export default {
     themes: [
       {
         mizan: {
-          "primary": "#0F4C3A",        
+          "primary": "#0F4C3A",
           "primary-content": "#F9F6F0",
-          "secondary": "#B8860B",     
+          "secondary": "#B8860B",
           "secondary-content": "#F9F6F0",
-          "accent": "#0A3326",       
-          "neutral": "#EBE6D9",         
-          "base-100": "#F9F6F0",     
+          "accent": "#0A3326",
+          "neutral": "#EBE6D9",
+          "base-100": "#F9F6F0",
           "base-200": "#EBE6D9",
           "base-300": "#D9D3C4",
         },

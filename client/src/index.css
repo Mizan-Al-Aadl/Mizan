@@ -17,8 +17,8 @@
 
   body {
     font-family: "Cairo", sans-serif;
-    background-color: #f9f6f0;
-    color: #111827;
+    background-color: var(--b1);
+    color: var(--bc);
   }
 }
 
