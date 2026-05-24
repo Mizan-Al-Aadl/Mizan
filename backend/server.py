@@ -4,6 +4,8 @@ import uuid
 import asyncio
 import logging
 import threading
+import re
+import contextlib
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import List, Optional, AsyncGenerator
@@ -16,18 +18,11 @@ from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict
 
-try:
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-except Exception:
-    LlmChat = None
-    UserMessage = None
-
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-MONGO_URL = os.environ["MONGO_URL"]
-DB_NAME = os.environ["DB_NAME"]
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
+DB_NAME = os.environ.get("DB_NAME", "mizan")
 
 USE_FINETUNED = os.environ.get("USE_FINETUNED", "false").lower() == "true"
 FINETUNED_MODEL_PATH = os.environ.get(
@@ -38,10 +33,23 @@ FINETUNED_HF_FILE = os.environ.get(
     "FINETUNED_HF_FILE", "llama-3-8b-instruct.Q4_K_M.gguf"
 )
 FINETUNED_N_CTX = int(os.environ.get("FINETUNED_N_CTX", "2048"))
-FINETUNED_N_THREADS = int(os.environ.get("FINETUNED_N_THREADS", "6"))
+FINETUNED_N_THREADS = int(os.environ.get("FINETUNED_N_THREADS", "4"))
 
 CHATBOT_LOCAL_URL = os.environ.get("CHATBOT_LOCAL_URL", "").strip()
-ALLOW_CLAUDE_FALLBACK = os.environ.get("ALLOW_CLAUDE_FALLBACK", "false").lower() == "true"
+
+AZURE_ML_ENDPOINT = os.environ.get("AZURE_ML_ENDPOINT", "").strip()
+AZURE_ML_API_KEY = os.environ.get("AZURE_ML_API_KEY", "").strip()
+AZURE_ML_DEPLOYMENT = os.environ.get("AZURE_ML_DEPLOYMENT", "").strip()
+USE_AZURE_ENDPOINT = os.environ.get("USE_AZURE_ENDPOINT", "true").lower() == "true"
+AZURE_TEMPERATURE = float(os.environ.get("AZURE_TEMPERATURE", "0.4"))
+AZURE_MAX_TOKENS = int(os.environ.get("AZURE_MAX_TOKENS", "128"))
+AZURE_FREQUENCY_PENALTY = float(os.environ.get("AZURE_FREQUENCY_PENALTY", "1.15"))
+AZURE_PRESENCE_PENALTY = float(os.environ.get("AZURE_PRESENCE_PENALTY", "1.0"))
+AZURE_INCLUDE_SYSTEM_PROMPT = os.environ.get("AZURE_INCLUDE_SYSTEM_PROMPT", "false").lower() == "true"
+AZURE_HISTORY_MAX_MESSAGES = int(os.environ.get("AZURE_HISTORY_MAX_MESSAGES", "6"))
+AZURE_CONTEXT_WINDOW = int(os.environ.get("AZURE_CONTEXT_WINDOW", "512"))
+MODEL_HTTP_TIMEOUT_SECONDS = float(os.environ.get("MODEL_HTTP_TIMEOUT_SECONDS", "300"))
+STREAM_KEEPALIVE_SECONDS = float(os.environ.get("STREAM_KEEPALIVE_SECONDS", "10"))
 
 _llm_instance = None
 _llm_lock = asyncio.Lock()
@@ -98,6 +106,7 @@ class SendMessageBody(BaseModel):
     chat_id: str
     content: str
     use_local: bool = False
+    use_azure: bool = False
     use_finetuned: bool = False
 
 
@@ -110,7 +119,7 @@ async def _call_local_chatbot(history: List[dict]) -> Optional[str]:
     if not CHATBOT_LOCAL_URL:
         return None
     try:
-        async with httpx.AsyncClient(timeout=120.0) as cx:
+        async with httpx.AsyncClient(timeout=MODEL_HTTP_TIMEOUT_SECONDS) as cx:
             r = await cx.post(
                 f"{CHATBOT_LOCAL_URL.rstrip('/')}/chat",
                 json={"system": SYSTEM_PROMPT, "messages": history},
@@ -121,6 +130,124 @@ async def _call_local_chatbot(history: List[dict]) -> Optional[str]:
     except Exception as e:
         logger.warning("Local chatbot unreachable: %s", e)
         return None
+
+
+def _azure_headers() -> dict:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {AZURE_ML_API_KEY}",
+    }
+    if AZURE_ML_DEPLOYMENT:
+        headers["azureml-model-deployment"] = AZURE_ML_DEPLOYMENT
+    return headers
+
+
+def _extract_reply_from_azure(data: dict) -> Optional[str]:
+    choices = data.get("choices") or []
+    if not choices:
+        return None
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    return None
+
+
+def _build_azure_messages(history: List[dict]) -> List[dict]:
+    # Start from the most recent N messages, then trim by token window.
+    recent = history[-AZURE_HISTORY_MAX_MESSAGES:] if AZURE_HISTORY_MAX_MESSAGES > 0 else history
+
+    def _approx_tokens(text: str) -> int:
+        # Conservative token estimate: words ~= tokens
+        if not text:
+            return 0
+        return max(1, len(re.findall(r"\S+", text)))
+
+    def _trim_history_by_tokens(messages: List[dict], max_tokens_available: int) -> List[dict]:
+        kept: List[dict] = []
+        tokens = 0
+        # iterate from the end (most recent) and keep adding until we reach budget
+        for msg in reversed(messages):
+            t = _approx_tokens(str(msg.get("content", ""))) + 4
+            if tokens + t > max_tokens_available:
+                break
+            tokens += t
+            kept.append(msg)
+        kept.reverse()
+        return kept
+
+    # Reserve tokens for the model's response
+    reserved_for_response = AZURE_MAX_TOKENS
+    # Compute how many tokens are available for the system+history
+    max_context = AZURE_CONTEXT_WINDOW
+    available_for_context = max(0, max_context - reserved_for_response)
+
+    msgs: List[dict] = []
+    system_tokens = 0
+    if AZURE_INCLUDE_SYSTEM_PROMPT:
+        system_tokens = _approx_tokens(SYSTEM_PROMPT) + 4
+        # if system prompt consumes too much of the context, include a shortened prompt
+        if system_tokens >= available_for_context:
+            short_sys = SYSTEM_PROMPT[:1024]
+            msgs.append({"role": "system", "content": short_sys})
+            available_for_context = max(0, available_for_context - _approx_tokens(short_sys) - 4)
+        else:
+            msgs.append({"role": "system", "content": SYSTEM_PROMPT})
+            available_for_context = max(0, available_for_context - system_tokens)
+
+    trimmed_history = _trim_history_by_tokens(recent, available_for_context)
+    msgs.extend(trimmed_history)
+    return msgs
+
+
+async def _call_azure_endpoint(history: List[dict]) -> Optional[str]:
+    if not AZURE_ML_ENDPOINT or not AZURE_ML_API_KEY:
+        return None
+
+    msgs = _build_azure_messages(history)
+    payload = {
+        "messages": msgs,
+        "temperature": AZURE_TEMPERATURE,
+        "max_tokens": AZURE_MAX_TOKENS,
+        "frequency_penalty": AZURE_FREQUENCY_PENALTY,
+        "presence_penalty": AZURE_PRESENCE_PENALTY,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=MODEL_HTTP_TIMEOUT_SECONDS) as cx:
+            r = await cx.post(AZURE_ML_ENDPOINT, headers=_azure_headers(), json=payload)
+            r.raise_for_status()
+            data = r.json()
+
+            if isinstance(data, dict) and data.get("error"):
+                raise RuntimeError(f"Azure endpoint error: {data.get('error')}")
+
+            reply = _extract_reply_from_azure(data if isinstance(data, dict) else {})
+            if reply:
+                return reply
+
+            raise RuntimeError("Azure endpoint response missing expected choices/message content")
+    except httpx.HTTPStatusError as e:
+        detail = ""
+        try:
+            detail = e.response.text[:500]
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"Azure HTTP {e.response.status_code}: {detail}")
+    except httpx.TimeoutException:
+        raise RuntimeError(f"Azure request timed out after {MODEL_HTTP_TIMEOUT_SECONDS} seconds")
+    except Exception as e:
+        raise RuntimeError(f"Azure endpoint unreachable: {e}")
+
+
+async def _stream_azure(history: List[dict]) -> AsyncGenerator[str, None]:
+    reply = await _call_azure_endpoint(history)
+    if not reply:
+        raise RuntimeError("Azure endpoint unreachable or returned empty reply")
+    for part in re.findall(r"\S+\s*", reply):
+        yield part
+        await asyncio.sleep(0.01)
 
 
 def _ensure_model_file() -> bool:
@@ -234,54 +361,48 @@ async def _stream_finetuned(history: List[dict]) -> AsyncGenerator[str, None]:
             t.join(timeout=5)
 
 
-async def _call_claude(session_id: str, history: List[dict]) -> str:
-    if LlmChat is None or UserMessage is None:
-        raise HTTPException(500, "Claude fallback unavailable: install emergentintegrations")
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(500, "EMERGENT_LLM_KEY missing in backend/.env")
-
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=session_id,
-        system_message=SYSTEM_PROMPT,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-
-    last_user_text = ""
-    for m in history:
-        if m["role"] == "user":
-            last_user_text = m["content"]
-
-    prior = history[:-1]
-    if prior:
-        ctx_lines = []
-        for m in prior:
-            who = "المستخدم" if m["role"] == "user" else "ميزان"
-            ctx_lines.append(f"{who}: {m['content']}")
-        context_block = "سياق المحادثة السابقة:\n" + "\n".join(ctx_lines) + "\n\nرسالة المستخدم الحالية:\n" + last_user_text
-    else:
-        context_block = last_user_text
-
-    response = await chat.send_message(UserMessage(text=context_block))
-    return response if isinstance(response, str) else str(response)
-
-
-async def _stream_claude(session_id: str, history: List[dict]) -> AsyncGenerator[str, None]:
-    reply = await _call_claude(session_id, history)
-    if reply:
-        step = 32
-        for i in range(0, len(reply), step):
-            yield reply[i : i + step]
-            await asyncio.sleep(0.015)
-
-
 async def _stream_local(history: List[dict]) -> AsyncGenerator[str, None]:
     reply = await _call_local_chatbot(history)
     if not reply:
         raise RuntimeError("Local chatbot unreachable or returned empty reply")
-    step = 32
-    for i in range(0, len(reply), step):
-        yield reply[i : i + step]
-        await asyncio.sleep(0.015)
+    for part in re.findall(r"\S+\s*", reply):
+        yield part
+        await asyncio.sleep(0.01)
+
+
+async def _with_keepalive(gen: AsyncGenerator[str, None], interval_seconds: float) -> AsyncGenerator[str, None]:
+    q: asyncio.Queue = asyncio.Queue()
+    sentinel = object()
+
+    async def producer() -> None:
+        try:
+            async for item in gen:
+                await q.put(item)
+        except Exception as e:
+            await q.put(e)
+        finally:
+            await q.put(sentinel)
+
+    task = asyncio.create_task(producer())
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(q.get(), timeout=interval_seconds)
+            except asyncio.TimeoutError:
+                yield "event: ping\\ndata: {}\\n\\n"
+                continue
+
+            if item is sentinel:
+                break
+            if isinstance(item, Exception):
+                raise item
+
+            yield item
+    finally:
+        if not task.done():
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 @api.get("/")
@@ -293,8 +414,13 @@ async def root():
 async def health():
     return {
         "status": "ok",
-        "llm": "configured" if EMERGENT_LLM_KEY else "missing",
         "local_chatbot": bool(CHATBOT_LOCAL_URL),
+        "azure": {
+            "enabled": USE_AZURE_ENDPOINT,
+            "configured": bool(AZURE_ML_ENDPOINT and AZURE_ML_API_KEY),
+            "endpoint": AZURE_ML_ENDPOINT,
+            "deployment": AZURE_ML_DEPLOYMENT,
+        },
         "finetuned": {
             "enabled": USE_FINETUNED,
             "model_path": FINETUNED_MODEL_PATH,
@@ -356,12 +482,24 @@ async def send_message(body: SendMessageBody):
     history = [{"role": d["role"], "content": d["content"]} for d in history_docs]
 
     reply_text: Optional[str] = None
-    source = "claude"
+    source = "unavailable"
+    azure_error: Optional[str] = None
 
     if body.use_local:
         reply_text = await _call_local_chatbot(history)
         if reply_text is not None:
             source = "local_url"
+
+    if reply_text is None and (body.use_azure or USE_AZURE_ENDPOINT):
+        try:
+            reply_text = await _call_azure_endpoint(history)
+            if reply_text is not None:
+                source = "azure_endpoint"
+            else:
+                azure_error = "Azure endpoint is not configured"
+        except Exception as e:
+            azure_error = str(e)
+            logger.warning("Azure call failed: %s", azure_error)
 
     if reply_text is None and (body.use_finetuned or USE_FINETUNED):
         reply_text = await _call_finetuned(history)
@@ -369,13 +507,10 @@ async def send_message(body: SendMessageBody):
             source = "finetuned"
 
     if reply_text is None:
-        if ALLOW_CLAUDE_FALLBACK:
-            reply_text = await _call_claude(body.chat_id, history)
-        else:
-            raise HTTPException(
-                503,
-                "No available model response. Configure local/fine-tuned model, or set ALLOW_CLAUDE_FALLBACK=true.",
-            )
+        raise HTTPException(
+            503,
+            azure_error or "No available model response. Ensure Azure endpoint is reachable or enable local/fine-tuned model.",
+        )
 
     ai_msg = Message(chat_id=body.chat_id, role="assistant", content=reply_text, source=source)
     await db.messages.insert_one(ai_msg.model_dump())
@@ -403,25 +538,29 @@ async def send_message_stream(body: SendMessageBody):
     history = [{"role": d["role"], "content": d["content"]} for d in history_docs]
 
     use_local_now = body.use_local and bool(CHATBOT_LOCAL_URL)
-    use_finetuned_now = (body.use_finetuned or USE_FINETUNED) and not use_local_now
+    use_azure_now = (body.use_azure or USE_AZURE_ENDPOINT) and not use_local_now
+    use_finetuned_now = (body.use_finetuned or USE_FINETUNED) and not use_local_now and not use_azure_now
 
     async def event_gen():
         full_chunks: List[str] = []
-        source = "local_url" if use_local_now else ("finetuned" if use_finetuned_now else "claude")
+        source = "local_url" if use_local_now else ("azure_endpoint" if use_azure_now else "finetuned")
         try:
             if use_local_now:
                 gen = _stream_local(history)
+            elif use_azure_now:
+                gen = _stream_azure(history)
             elif use_finetuned_now:
                 gen = _stream_finetuned(history)
-            elif ALLOW_CLAUDE_FALLBACK:
-                gen = _stream_claude(body.chat_id, history)
             else:
                 raise HTTPException(
                     503,
-                    "No available model response. Configure local/fine-tuned model, or set ALLOW_CLAUDE_FALLBACK=true.",
+                    "No available model response. Ensure Azure endpoint is reachable or enable local/fine-tuned model.",
                 )
 
-            async for token in gen:
+            async for token in _with_keepalive(gen, STREAM_KEEPALIVE_SECONDS):
+                if token.startswith("event: ping"):
+                    yield token
+                    continue
                 full_chunks.append(token)
                 yield f"event: token\\ndata: {json.dumps({'text': token}, ensure_ascii=False)}\\n\\n"
 

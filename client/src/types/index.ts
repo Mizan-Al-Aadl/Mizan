@@ -14,7 +14,7 @@ export const MessageSchema = z.object({
   chat_id: z.string(),
   role: z.enum(["user", "assistant"]),
   content: z.string(),
-  source: z.literal("local").optional(),
+  source: z.enum(["local", "local_url", "finetuned", "claude", "azure_endpoint"]).optional(),
   created_at: z.string(),
 });
 
@@ -41,7 +41,7 @@ export type SendMessageInput = z.infer<typeof SendMessageSchema>;
 export const TokenEventSchema = z.object({ text: z.string() });
 export const DoneEventSchema = z.object({
   message_id: z.string(),
-  source: z.literal("local"),
+  source: z.enum(["local", "local_url", "finetuned", "claude", "azure_endpoint"]),
 });
 export const ErrorEventSchema = z.object({ error: z.string() });
 

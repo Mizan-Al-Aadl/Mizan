@@ -15,6 +15,14 @@ export default function MessageBubble({
   streaming = false,
 }: MessageBubbleProps) {
   const isUser = role === "user";
+  const sourceLabel =
+    source === "azure_endpoint"
+      ? "Azure Endpoint"
+      : source === "finetuned"
+      ? "Mizan Fine-tuned"
+      : source === "claude"
+      ? "Claude Fallback"
+      : "Mizan Local";
 
   return (
     <div
@@ -67,7 +75,7 @@ export default function MessageBubble({
             className="mt-3 pt-2 border-t border-base-200 flex items-center gap-1.5 text-[11px] font-cairo text-base-content/40"
           >
             <Bot className="w-3 h-3" />
-            {"نموذج Mizan المحلي"}
+            {sourceLabel}
           </div>
         )}
       </div>

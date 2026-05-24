@@ -2,6 +2,7 @@ fastapi==0.110.1
 uvicorn==0.25.0
 pydantic>=2.6.4
 python-dotenv>=1.0.1
+httpx>=0.27.0
 
 # LoRA merge + HF model export
 transformers>=4.44.0
