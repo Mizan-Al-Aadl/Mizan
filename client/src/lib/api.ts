@@ -9,7 +9,10 @@ import {
   ErrorEventSchema,
 } from "@/types";
 
-const BASE = "/api";
+const RAW_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+const BASE = (RAW_BASE && RAW_BASE.length > 0 ? RAW_BASE : "/api").replace(/\/$/, "");
+const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 15000);
+const STREAM_TIMEOUT_MS = Number(import.meta.env.VITE_STREAM_TIMEOUT_MS ?? 180000); // Increased from 60s to 180s for Azure processing time
 
 // ─── Generic fetch helper ─────────────────────────────────────────────────────
 async function apiFetch<T>(
@@ -17,10 +20,17 @@ async function apiFetch<T>(
   schema: z.ZodSchema<T>,
   init?: RequestInit
 ): Promise<T> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
+    signal: init?.signal ?? controller.signal,
+  }).finally(() => {
+    window.clearTimeout(timer);
   });
+
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`API ${res.status}: ${body}`);
@@ -64,7 +74,20 @@ export function sendMessageStream(
   const controller = new AbortController();
 
   void (async () => {
+    let timeoutHandle: number | undefined;
+    const resetTimeout = () => {
+      if (timeoutHandle !== undefined) {
+        window.clearTimeout(timeoutHandle);
+      }
+      timeoutHandle = window.setTimeout(() => {
+        controller.abort();
+        callbacks.onError("Request timed out. Please check backend connectivity.");
+      }, STREAM_TIMEOUT_MS);
+    };
+
     try {
+      resetTimeout();
+
       const res = await fetch(`${BASE}/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -85,6 +108,7 @@ export function sendMessageStream(
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
+        resetTimeout();
         buf += decoder.decode(value, { stream: true });
 
         let idx: number;
@@ -107,10 +131,18 @@ export function sendMessageStream(
               if (parsed.success) callbacks.onToken(parsed.data.text);
             } else if (event === "done") {
               const parsed = DoneEventSchema.safeParse(payload);
-              if (parsed.success) callbacks.onDone(parsed.data);
+              if (parsed.success) {
+                callbacks.onDone(parsed.data);
+                if (timeoutHandle !== undefined) {
+                  window.clearTimeout(timeoutHandle);
+                }
+              }
             } else if (event === "error") {
               const parsed = ErrorEventSchema.safeParse(payload);
               callbacks.onError(parsed.success ? parsed.data.error : "Unknown error");
+              if (timeoutHandle !== undefined) {
+                window.clearTimeout(timeoutHandle);
+              }
             }
           } catch {
             // malformed SSE block — skip
@@ -120,6 +152,10 @@ export function sendMessageStream(
     } catch (err) {
       if (err instanceof Error && err.name !== "AbortError") {
         callbacks.onError(err.message);
+      }
+    } finally {
+      if (timeoutHandle !== undefined) {
+        window.clearTimeout(timeoutHandle);
       }
     }
   })();

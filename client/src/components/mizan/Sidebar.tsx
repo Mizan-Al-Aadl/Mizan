@@ -34,6 +34,7 @@ export default function Sidebar({
         data-testid="sidebar"
         className={`
           ${mobileOpen ? "translate-x-0" : "translate-x-[-100%] md:translate-x-0"}
+          ${mobileOpen ? "pointer-events-auto" : "pointer-events-none md:pointer-events-auto"}
           fixed md:static top-0 right-0 z-50 md:z-auto
           h-full w-72 md:w-80
           bg-base-200 border-l border-base-300

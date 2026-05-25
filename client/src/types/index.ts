@@ -14,7 +14,10 @@ export const MessageSchema = z.object({
   chat_id: z.string(),
   role: z.enum(["user", "assistant"]),
   content: z.string(),
-  source: z.enum(["local", "local_url", "finetuned", "claude", "azure_endpoint"]).optional(),
+  source: z
+    .enum(["local", "local_url", "finetuned", "claude", "azure_endpoint"])
+    .nullable()
+    .optional(),
   created_at: z.string(),
 });
 

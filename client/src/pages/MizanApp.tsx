@@ -194,7 +194,6 @@ export default function MizanApp() {
           },
           onError: (msg) => {
             toast.error(`خطأ من المساعد: ${msg}`);
-            setMessages((prev) => prev.filter((m) => m.id !== tempUser.id));
             setStreamingText("");
             setSending(false);
             resolve();
