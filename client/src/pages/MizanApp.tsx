@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
   Plus,
@@ -18,6 +19,7 @@ import {
   listMessages,
   sendMessageStream,
 } from "@/lib/api";
+import { useAuth } from "@/hooks/useAuth";
 import type { Chat, Message } from "@/types";
 
 import Sidebar from "@/components/mizan/Sidebar";
@@ -64,6 +66,8 @@ export default function MizanApp() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [streamingText, setStreamingText] = useState("");
 
+  const { logout } = useAuth();
+  const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
   const skipNextLoadRef = useRef(false);
 
@@ -221,6 +225,11 @@ export default function MizanApp() {
 
   const showEmpty = !activeId && messages.length === 0;
 
+  const handleLogout = () => {
+    logout();
+    navigate("/login", { replace: true });
+  };
+
   // ── Render ──
   return (
     <div className="h-screen w-full flex flex-col bg-mizan-bg text-gray-900 overflow-hidden">
@@ -258,6 +267,7 @@ export default function MizanApp() {
           onNew={handleNewChat}
           onDelete={handleDelete}
           onRename={handleRename}
+          onLogout={handleLogout}
           mobileOpen={sidebarOpen}
           onCloseMobile={() => setSidebarOpen(false)}
         />

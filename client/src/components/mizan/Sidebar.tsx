@@ -1,4 +1,4 @@
-import { Plus, Scale, Trash2, MessageSquare, X, Edit3 } from "lucide-react";
+import { Plus, Scale, Trash2, MessageSquare, X, Edit3, LogOut } from "lucide-react";
 import { useState } from "react";
 import type { Chat } from "@/types";
 
@@ -9,6 +9,7 @@ interface SidebarProps {
   onNew: () => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => void;
+  onLogout: () => void;
   mobileOpen: boolean;
   onCloseMobile: () => void;
 }
@@ -20,6 +21,7 @@ export default function Sidebar({
   onNew,
   onDelete,
   onRename,
+  onLogout,
   mobileOpen,
   onCloseMobile,
 }: SidebarProps) {
@@ -177,9 +179,18 @@ export default function Sidebar({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-base-300 text-xs text-base-content/50 font-cairo">
-          مساعد قانوني لبناني — قيد التطوير.
+        <div className="p-4 border-t border-base-300 space-y-3">
+          <button
+            type="button"
+            onClick={onLogout}
+            className="btn btn-ghost btn-block justify-start gap-3 rounded-xl text-base-content"
+          >
+            <LogOut className="w-4 h-4" />
+            تسجيل الخروج
+          </button>
+          <div className="text-xs text-base-content/50 font-cairo">
+            مساعد قانوني لبناني — قيد التطوير.
+          </div>
         </div>
       </aside>
     </>
