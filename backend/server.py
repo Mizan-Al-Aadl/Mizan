@@ -117,6 +117,10 @@ class ChatCreate(BaseModel):
     title: Optional[str] = None
 
 
+class ChatUpdate(BaseModel):
+    title: str
+
+
 class SendMessageBody(BaseModel):
     chat_id: str
     content: str
@@ -654,6 +658,22 @@ async def delete_chat(chat_id: str):
     if res.deleted_count == 0:
         raise HTTPException(404, "Chat not found")
     return {"ok": True}
+
+
+@api.patch("/chats/{chat_id}", response_model=Chat)
+async def update_chat(chat_id: str, body: ChatUpdate):
+    doc = await db.chats.find_one({"id": chat_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Chat not found")
+    title = body.title.strip() or "محادثة جديدة"
+    updated_at = datetime.now(timezone.utc).isoformat()
+    await db.chats.update_one(
+        {"id": chat_id},
+        {"$set": {"title": title, "updated_at": updated_at}},
+    )
+    doc["title"] = title
+    doc["updated_at"] = updated_at
+    return doc
 
 
 @api.get("/chats/{chat_id}/messages", response_model=List[Message])

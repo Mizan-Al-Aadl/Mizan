@@ -1,4 +1,5 @@
-import { Plus, Scale, Trash2, MessageSquare, X } from "lucide-react";
+import { Plus, Scale, Trash2, MessageSquare, X, Edit3 } from "lucide-react";
+import { useState } from "react";
 import type { Chat } from "@/types";
 
 interface SidebarProps {
@@ -7,6 +8,7 @@ interface SidebarProps {
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  onRename: (id: string, title: string) => void;
   mobileOpen: boolean;
   onCloseMobile: () => void;
 }
@@ -17,9 +19,28 @@ export default function Sidebar({
   onSelect,
   onNew,
   onDelete,
+  onRename,
   mobileOpen,
   onCloseMobile,
 }: SidebarProps) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
+
+  const submitRename = (chatId: string, originalTitle: string) => {
+    const trimmed = draftTitle.trim();
+    setEditingId(null);
+    if (!trimmed || trimmed === originalTitle) {
+      setDraftTitle(originalTitle);
+      return;
+    }
+    onRename(chatId, trimmed);
+  };
+
+  const cancelRename = (originalTitle: string) => {
+    setEditingId(null);
+    setDraftTitle(originalTitle);
+  };
+
   return (
     <>
       {/* Mobile overlay */}
@@ -83,36 +104,75 @@ export default function Sidebar({
             </p>
           ) : (
             <ul className="flex flex-col gap-1" data-testid="chat-list">
-              {chats.map((c) => (
-                <li
-                  key={c.id}
-                  data-testid={`chat-item-${c.id}`}
-                  onClick={() => onSelect(c.id)}
-                  className={`
-                    group flex items-center gap-2 p-3 rounded-lg cursor-pointer
-                    transition-colors font-cairo
-                    ${
-                      activeId === c.id
-                        ? "bg-primary/10 text-primary"
-                        : "hover:bg-base-300 text-base-content"
-                    }
-                  `}
-                >
-                  <MessageSquare className="w-4 h-4 shrink-0 opacity-70" />
-                  <span className="truncate flex-1 text-sm">{c.title}</span>
-                  <button
-                    data-testid={`delete-chat-${c.id}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDelete(c.id);
+              {chats.map((c) => {
+                const isEditing = editingId === c.id;
+                return (
+                  <li
+                    key={c.id}
+                    data-testid={`chat-item-${c.id}`}
+                    onClick={() => {
+                      if (!isEditing) onSelect(c.id);
                     }}
-                    className="btn btn-ghost btn-xs btn-square opacity-0 group-hover:opacity-100"
-                    aria-label="حذف المحادثة"
+                    className={`
+                      group flex items-center gap-2 p-3 rounded-lg cursor-pointer
+                      transition-colors font-cairo
+                      ${
+                        activeId === c.id
+                          ? "bg-primary/10 text-primary"
+                          : "hover:bg-base-300 text-base-content"
+                      }
+                    `}
                   >
-                    <Trash2 className="w-4 h-4 text-base-content/60" />
-                  </button>
-                </li>
-              ))}
+                    <MessageSquare className="w-4 h-4 shrink-0 opacity-70" />
+                    {isEditing ? (
+                      <input
+                        autoFocus
+                        value={draftTitle}
+                        onChange={(e) => setDraftTitle(e.target.value)}
+                        onBlur={() => submitRename(c.id, c.title)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.currentTarget.blur();
+                          }
+                          if (e.key === "Escape") {
+                            cancelRename(c.title);
+                          }
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex-1 bg-transparent outline-none border border-primary/20 rounded-lg px-2 py-1 text-sm"
+                        aria-label="تحرير اسم المحادثة"
+                      />
+                    ) : (
+                      <span className="truncate flex-1 text-sm">{c.title}</span>
+                    )}
+                    {!isEditing && (
+                      <button
+                        data-testid={`rename-chat-${c.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingId(c.id);
+                          setDraftTitle(c.title);
+                        }}
+                        className="btn btn-ghost btn-xs btn-square opacity-0 group-hover:opacity-100"
+                        aria-label="إعادة تسمية المحادثة"
+                      >
+                        <Edit3 className="w-4 h-4 text-base-content/60" />
+                      </button>
+                    )}
+                    <button
+                      data-testid={`delete-chat-${c.id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(c.id);
+                      }}
+                      className="btn btn-ghost btn-xs btn-square opacity-0 group-hover:opacity-100"
+                      aria-label="حذف المحادثة"
+                    >
+                      <Trash2 className="w-4 h-4 text-base-content/60" />
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

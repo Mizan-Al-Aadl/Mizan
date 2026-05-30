@@ -14,6 +14,7 @@ import {
   listChats,
   createChat,
   deleteChat,
+  updateChat,
   listMessages,
   sendMessageStream,
 } from "@/lib/api";
@@ -138,6 +139,21 @@ export default function MizanApp() {
     }
   };
 
+  const handleRename = async (id: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      toast.error("اسم المحادثة لا يمكن أن يكون فارغاً");
+      return;
+    }
+    try {
+      const updated = await updateChat(id, trimmed);
+      setChats((prev) => prev.map((c) => (c.id === id ? updated : c)));
+      toast.success("تم إعادة تسمية المحادثة");
+    } catch {
+      toast.error("تعذّر إعادة تسمية المحادثة");
+    }
+  };
+
   const handleSend = async (text: string) => {
     const content = text.trim();
     if (!content || sending) return;
@@ -241,6 +257,7 @@ export default function MizanApp() {
           }}
           onNew={handleNewChat}
           onDelete={handleDelete}
+          onRename={handleRename}
           mobileOpen={sidebarOpen}
           onCloseMobile={() => setSidebarOpen(false)}
         />

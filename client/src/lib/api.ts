@@ -55,6 +55,12 @@ export const deleteChat = (id: string): Promise<{ ok: boolean }> =>
     method: "DELETE",
   });
 
+export const updateChat = (id: string, title: string): Promise<Chat> =>
+  apiFetch(`/chats/${id}`, ChatSchema, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+
 export const listMessages = (chatId: string): Promise<Message[]> =>
   apiFetch(`/chats/${chatId}/messages`, z.array(MessageSchema));
 
