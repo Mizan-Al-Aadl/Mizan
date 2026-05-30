@@ -57,9 +57,3 @@ Main endpoints:
 - `GET /api/chats/{chat_id}/messages`
 - `POST /api/chat`
 - `POST /api/chat/stream`
-
-## Notes
-
-- Do not commit local `.env` files.
-- Large generated artifacts such as virtual environments, build folders, and model exports should stay out of the repo.
-- Mizan is an educational tool and does not provide legal advice.
