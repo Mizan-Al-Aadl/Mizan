@@ -49,7 +49,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
       )}
       <div
         className={`
-          flex items-end bg-base-100 border rounded-2xl p-2 shadow-sm
+          flex items-center bg-base-100 border rounded-2xl p-2 shadow-sm
           transition-all focus-within:ring-2 focus-within:ring-primary/20
           ${error ? "border-error" : "border-base-300 focus-within:border-primary"}
         `}
@@ -70,8 +70,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           data-testid="send-btn"
           onClick={submit}
           disabled={disabled || !value.trim()}
-          className="btn btn-primary btn-sm p-3 rounded-xl self-end m-1 flex-shrink-0 disabled:opacity-40"
-          aria-label="إرسال"
+          className="btn btn-primary btn-sm p-3 rounded-xl self-center m-1 flex items-center justify-center flex-shrink-0 disabled:opacity-40"          aria-label="إرسال"
         >
           {disabled ? (
             <Loader2 className="w-5 h-5 animate-spin" />
