@@ -1,6 +1,6 @@
-# Local Chatbot
+# Local Chatbot (Optional)
 
-This folder contains the scripts for running Mizan's fine-tuned model locally on CPU.
+This folder contains scripts for running Mizan's fine-tuned model locally on CPU. This is **optional** — the app works fine using the Azure endpoint without any of this.
 
 The workflow is:
 
@@ -14,16 +14,12 @@ The workflow is:
 chatbot/
 |-- README.md
 |-- quantize.py
-|-- server.py
-|-- requirements.txt
 `-- results/
     `-- baseline_lora/
 ```
 
 Place your training output in `chatbot/results/baseline_lora/`.
 It should contain the adapter weights, config, and tokenizer files.
-
-The adapter was trained against `unsloth/llama-3-8b-Instruct-bnb-4bit`, but for CPU inference we merge it into the fp16 base model `meta-llama/Meta-Llama-3-8B-Instruct` and then quantize the result to GGUF.
 
 ## 1. Create a virtual environment
 
@@ -33,12 +29,6 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -U pip
 pip install -r requirements.txt
-```
-
-If you are on macOS or Linux, use:
-
-```bash
-source .venv/bin/activate
 ```
 
 ## 2. Install llama.cpp
@@ -66,30 +56,15 @@ python quantize.py --adapter ./results/baseline_lora --base meta-llama/Meta-Llam
 
 ## 5. Run the local server
 
-```bash
-python server.py --model ./mizan-q4_k_m.gguf --host 0.0.0.0 --port 8009
-```
-
-Test it with:
-
-```bash
-curl -X POST http://localhost:8009/chat -H "Content-Type: application/json" -d "{\"system\":\"You are Mizan...\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
-```
-
-## 6. Connect it to the backend
-
-Set this in `backend/.env`:
+Start the backend's built-in local model support by setting in `backend/.env`:
 
 ```env
-CHATBOT_LOCAL_URL=http://localhost:8009
+USE_FINETUNED=true
+FINETUNED_MODEL_PATH=./chatbot/mizan-q4_k_m.gguf
 ```
-
-Then the FastAPI backend can call the local model when local mode is enabled.
 
 ## Quantization notes
 
 - `Q4_K_M` is the smallest common option and is best for lower-RAM machines.
 - `Q5_K_M` gives better quality if you have enough memory.
 - `Q8_0` uses more RAM but keeps more quality.
-
-If you do not plan to run the local model, you do not need anything in this folder except the source scripts.

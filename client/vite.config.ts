@@ -6,7 +6,7 @@ const rootDir = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, rootDir, "");
-  const backendTarget = env.VITE_BACKEND_URL || "http://localhost:8001";
+  const backendTarget = env.VITE_BACKEND_URL || "http://localhost:8000";
 
   return {
     plugins: [react()],
