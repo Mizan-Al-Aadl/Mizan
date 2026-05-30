@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { getToken } from "./auth.ts";
 import {
   Chat,
   ChatSchema,
@@ -7,12 +8,36 @@ import {
   TokenEventSchema,
   DoneEventSchema,
   ErrorEventSchema,
+  User,
+  UserSchema,
 } from "@/types";
 
 const RAW_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 const BASE = (RAW_BASE && RAW_BASE.length > 0 ? RAW_BASE : "/api").replace(/\/$/, "");
 const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 15000);
 const STREAM_TIMEOUT_MS = Number(import.meta.env.VITE_STREAM_TIMEOUT_MS ?? 180000); // Increased from 60s to 180s for Azure processing time
+
+function parseApiErrorBody(body: string): string {
+  if (!body) return "حدث خطأ غير متوقع";
+  try {
+    const json = JSON.parse(body);
+    const detail = json.detail || json.error || json.message;
+    if (typeof detail === "string" && detail.length > 0) {
+      return detail;
+    }
+  } catch {
+    // fall back to raw body
+  }
+  return body;
+}
+
+function buildApiErrorMessage(status: number, body: string): string {
+  const detail = parseApiErrorBody(body);
+  if (status === 401 || status === 409) return "البريد الإلكتروني أو كلمة المرور غير صحيحة.";
+  if (status === 400) return detail || "البيانات غير صحيحة، يرجى التحقق من الحقول.";
+  if (status >= 500) return "حدث خطأ في الخادم. حاول مرة أخرى لاحقًا.";
+  return detail;
+}
 
 // ─── Generic fetch helper ─────────────────────────────────────────────────────
 async function apiFetch<T>(
@@ -23,9 +48,19 @@ async function apiFetch<T>(
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string>),
+  };
+
+  const token = getToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers,
     signal: init?.signal ?? controller.signal,
   }).finally(() => {
     window.clearTimeout(timer);
@@ -33,13 +68,44 @@ async function apiFetch<T>(
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${body}`);
+    const message = buildApiErrorMessage(res.status, body);
+    throw new Error(`API ${res.status}: ${message}`);
   }
   const json = await res.json();
   return schema.parse(json);
 }
 
 // ─── Chat endpoints ───────────────────────────────────────────────────────────
+
+export const apiRegister = (
+  name: string,
+  email: string,
+  password: string
+): Promise<{ token: string }> =>
+  apiFetch(
+    "/auth/register",
+    z.object({ token: z.string() }),
+    {
+      method: "POST",
+      body: JSON.stringify({ name, email, password }),
+    }
+  );
+
+export const apiLogin = (
+  email: string,
+  password: string
+): Promise<{ token: string }> =>
+  apiFetch(
+    "/auth/login",
+    z.object({ token: z.string() }),
+    {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }
+  );
+
+export const apiGetMe = (): Promise<User> =>
+  apiFetch("/auth/me", UserSchema);
 
 export const listChats = (): Promise<Chat[]> =>
   apiFetch("/chats", z.array(ChatSchema));
@@ -53,6 +119,12 @@ export const createChat = (title?: string): Promise<Chat> =>
 export const deleteChat = (id: string): Promise<{ ok: boolean }> =>
   apiFetch(`/chats/${id}`, z.object({ ok: z.boolean() }), {
     method: "DELETE",
+  });
+
+export const updateChat = (id: string, title: string): Promise<Chat> =>
+  apiFetch(`/chats/${id}`, ChatSchema, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
   });
 
 export const listMessages = (chatId: string): Promise<Message[]> =>
@@ -88,9 +160,17 @@ export function sendMessageStream(
     try {
       resetTimeout();
 
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      const token = getToken();
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
       const res = await fetch(`${BASE}/chat/stream`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           chat_id: chatId,
           content,

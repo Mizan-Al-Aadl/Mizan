@@ -1,10 +1,22 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
-import MizanApp from './pages/MizanApp'
+import { Routes, Route, Navigate } from "react-router-dom";
+import MizanApp from "./pages/MizanApp";
+import LoginPage from "./pages/LoginPage";
+import RegisterPage from "./pages/RegisterPage";
+import ProtectedRoute from "./components/auth/ProtectedRoute";
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<MizanApp />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <MizanApp />
+          </ProtectedRoute>
+        }
+      />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

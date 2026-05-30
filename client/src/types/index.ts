@@ -26,6 +26,15 @@ export const HealthSchema = z.object({
   local_chatbot: z.boolean(),
 });
 
+export const UserSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  email: z.string().email(),
+  created_at: z.string(),
+});
+
+export type User = z.infer<typeof UserSchema>;
+
 // ─── Request schemas ──────────────────────────────────────────────────────────
 
 export const SendMessageSchema = z.object({

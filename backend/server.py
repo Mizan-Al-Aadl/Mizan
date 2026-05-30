@@ -7,7 +7,7 @@ import threading
 import re
 import contextlib
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional, AsyncGenerator
 
 try:
@@ -17,9 +17,12 @@ except ImportError:
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, HTTPException, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -29,6 +32,9 @@ load_dotenv(ROOT_DIR / ".env")
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "mizan")
 MONGO_SERVER_SELECTION_TIMEOUT_MS = int(os.environ.get("MONGO_SERVER_SELECTION_TIMEOUT_MS", "5000"))
+JWT_SECRET = os.environ.get("JWT_SECRET", "change-me")
+JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", str(60 * 24 * 7)))
 
 USE_FINETUNED = os.environ.get("USE_FINETUNED", "false").lower() == "true"
 FINETUNED_MODEL_PATH = os.environ.get(
@@ -113,8 +119,83 @@ class Message(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security = HTTPBearer()
+
+
+class UserCreate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    email: str
+    password: str
+
+
+class UserLogin(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    email: str
+    password: str
+
+
+class User(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    email: str
+    hashed_password: str
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    name: str
+    email: str
+    created_at: str
+
+
+class TokenResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    token: str
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def hash_password(password: str) -> str:
+    if len(password.encode("utf-8")) > 72:
+        raise ValueError("كلمة المرور يجب أن لا تتجاوز 72 بايت")
+    return pwd_context.hash(password)
+
+
+def create_access_token(subject_id: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode = {"sub": subject_id, "exp": expire}
+    return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UserOut:
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            raise ValueError("Missing user id in token")
+    except (JWTError, ValueError):
+        raise HTTPException(401, "Invalid or expired authentication token")
+
+    user_doc = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not user_doc:
+        raise HTTPException(401, "User not found")
+    return UserOut(**user_doc)
+
+
 class ChatCreate(BaseModel):
     title: Optional[str] = None
+
+
+class ChatUpdate(BaseModel):
+    title: str
 
 
 class SendMessageBody(BaseModel):
@@ -446,7 +527,7 @@ def _load_llm():
     if not _ensure_model_file():
         return None
     try:
-        from llama_cpp import Llama
+        from llama_cpp import Llama  # type: ignore[import]
 
         logger.info("Loading GGUF model from %s (ctx=%d, threads=%d)", FINETUNED_MODEL_PATH, FINETUNED_N_CTX, FINETUNED_N_THREADS)
         _llm_instance = Llama(
@@ -594,6 +675,45 @@ async def health():
     }
 
 
+@api.post("/auth/register", response_model=TokenResponse)
+async def register(body: UserCreate):
+    email = body.email.strip().lower()
+    if not body.name.strip():
+        raise HTTPException(400, "Name is required")
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(409, "Email already registered")
+
+    try:
+        hashed_password = hash_password(body.password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    user = User(
+        name=body.name.strip(),
+        email=email,
+        hashed_password=hashed_password,
+    )
+    await db.users.insert_one(user.model_dump())
+    token = create_access_token(user.id)
+    return TokenResponse(token=token)
+
+
+@api.post("/auth/login", response_model=TokenResponse)
+async def login(body: UserLogin):
+    email = body.email.strip().lower()
+    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user_doc or not verify_password(body.password, user_doc["hashed_password"]):
+        raise HTTPException(401, "Invalid email or password")
+
+    token = create_access_token(user_doc["id"])
+    return TokenResponse(token=token)
+
+
+@api.get("/auth/me", response_model=UserOut)
+async def get_me(current_user: UserOut = Depends(get_current_user)):
+    return current_user
+
+
 @api.post("/debug/raw")
 async def debug_raw(request: Request):
     """Temporary debug endpoint: logs raw request body for troubleshooting malformed requests."""
@@ -626,46 +746,70 @@ async def debug_azure_test():
 
 
 @api.post("/chats", response_model=Chat)
-async def create_chat(body: ChatCreate):
-    logger.info("POST /api/chats title=%s", body.title or "<default>")
+async def create_chat(body: ChatCreate, current_user: UserOut = Depends(get_current_user)):
+    logger.info("POST /api/chats title=%s user=%s", body.title or "<default>", current_user.id)
     chat_obj = Chat(title=body.title or "محادثة جديدة")
-    await db.chats.insert_one(chat_obj.model_dump())
+    chat_data = chat_obj.model_dump()
+    chat_data["user_id"] = current_user.id
+    await db.chats.insert_one(chat_data)
     return chat_obj
 
 
 @api.get("/chats", response_model=List[Chat])
-async def list_chats():
-    docs = await db.chats.find({}, {"_id": 0}).sort("updated_at", -1).to_list(500)
+async def list_chats(current_user: UserOut = Depends(get_current_user)):
+    docs = await db.chats.find({"user_id": current_user.id}, {"_id": 0}).sort("updated_at", -1).to_list(500)
     return docs
 
 
 @api.get("/chats/{chat_id}", response_model=Chat)
-async def get_chat(chat_id: str):
-    doc = await db.chats.find_one({"id": chat_id}, {"_id": 0})
+async def get_chat(chat_id: str, current_user: UserOut = Depends(get_current_user)):
+    doc = await db.chats.find_one({"id": chat_id, "user_id": current_user.id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Chat not found")
     return doc
 
 
 @api.delete("/chats/{chat_id}")
-async def delete_chat(chat_id: str):
+async def delete_chat(chat_id: str, current_user: UserOut = Depends(get_current_user)):
+    chat_doc = await db.chats.find_one({"id": chat_id, "user_id": current_user.id}, {"_id": 0})
+    if not chat_doc:
+        raise HTTPException(404, "Chat not found")
     await db.messages.delete_many({"chat_id": chat_id})
-    res = await db.chats.delete_one({"id": chat_id})
+    res = await db.chats.delete_one({"id": chat_id, "user_id": current_user.id})
     if res.deleted_count == 0:
         raise HTTPException(404, "Chat not found")
     return {"ok": True}
 
 
+@api.patch("/chats/{chat_id}", response_model=Chat)
+async def update_chat(chat_id: str, body: ChatUpdate, current_user: UserOut = Depends(get_current_user)):
+    doc = await db.chats.find_one({"id": chat_id, "user_id": current_user.id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Chat not found")
+    title = body.title.strip() or "محادثة جديدة"
+    updated_at = datetime.now(timezone.utc).isoformat()
+    await db.chats.update_one(
+        {"id": chat_id, "user_id": current_user.id},
+        {"$set": {"title": title, "updated_at": updated_at}},
+    )
+    doc["title"] = title
+    doc["updated_at"] = updated_at
+    return doc
+
+
 @api.get("/chats/{chat_id}/messages", response_model=List[Message])
-async def list_messages(chat_id: str):
+async def list_messages(chat_id: str, current_user: UserOut = Depends(get_current_user)):
+    chat_doc = await db.chats.find_one({"id": chat_id, "user_id": current_user.id}, {"_id": 0})
+    if not chat_doc:
+        raise HTTPException(404, "Chat not found")
     docs = await db.messages.find({"chat_id": chat_id}, {"_id": 0}).sort("created_at", 1).to_list(1000)
     return docs
 
 
 @api.post("/chat", response_model=Message)
-async def send_message(body: SendMessageBody):
-    logger.info("POST /api/chat chat_id=%s use_local=%s use_azure=%s use_finetuned=%s", body.chat_id, body.use_local, body.use_azure, body.use_finetuned)
-    chat = await db.chats.find_one({"id": body.chat_id}, {"_id": 0})
+async def send_message(body: SendMessageBody, current_user: UserOut = Depends(get_current_user)):
+    logger.info("POST /api/chat chat_id=%s user=%s use_local=%s use_azure=%s use_finetuned=%s", body.chat_id, current_user.id, body.use_local, body.use_azure, body.use_finetuned)
+    chat = await db.chats.find_one({"id": body.chat_id, "user_id": current_user.id}, {"_id": 0})
     if not chat:
         raise HTTPException(404, "Chat not found")
     if not body.content.strip():
@@ -720,9 +864,9 @@ async def send_message(body: SendMessageBody):
 
 
 @api.post("/chat/stream")
-async def send_message_stream(body: SendMessageBody):
-    logger.info("POST /api/chat/stream chat_id=%s use_local=%s use_azure=%s use_finetuned=%s", body.chat_id, body.use_local, body.use_azure, body.use_finetuned)
-    chat = await db.chats.find_one({"id": body.chat_id}, {"_id": 0})
+async def send_message_stream(body: SendMessageBody, current_user: UserOut = Depends(get_current_user)):
+    logger.info("POST /api/chat/stream chat_id=%s user=%s use_local=%s use_azure=%s use_finetuned=%s", body.chat_id, current_user.id, body.use_local, body.use_azure, body.use_finetuned)
+    chat = await db.chats.find_one({"id": body.chat_id, "user_id": current_user.id}, {"_id": 0})
     if not chat:
         raise HTTPException(404, "Chat not found")
     if not body.content.strip():

@@ -21,7 +21,7 @@ export default function EmptyState({ suggestions, onPick }: EmptyStateProps) {
         </span>
       </div>
       <p className="text-base-content/60 mb-8 max-w-sm">
-        مساعدك القانوني اللبناني. اسأل عن أي موضوع قانوني أو اطلع صياغة وثيقة.
+        مساعدك القانوني اللبناني. اسأل عن أي موضوع قانوني أو اطلب صياغة وثيقة.
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl">

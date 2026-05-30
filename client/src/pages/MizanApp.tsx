@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
   Plus,
@@ -14,9 +15,11 @@ import {
   listChats,
   createChat,
   deleteChat,
+  updateChat,
   listMessages,
   sendMessageStream,
 } from "@/lib/api";
+import { useAuth } from "@/hooks/useAuth";
 import type { Chat, Message } from "@/types";
 
 import Sidebar from "@/components/mizan/Sidebar";
@@ -63,6 +66,8 @@ export default function MizanApp() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [streamingText, setStreamingText] = useState("");
 
+  const { logout } = useAuth();
+  const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
   const skipNextLoadRef = useRef(false);
 
@@ -138,6 +143,21 @@ export default function MizanApp() {
     }
   };
 
+  const handleRename = async (id: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      toast.error("اسم المحادثة لا يمكن أن يكون فارغاً");
+      return;
+    }
+    try {
+      const updated = await updateChat(id, trimmed);
+      setChats((prev) => prev.map((c) => (c.id === id ? updated : c)));
+      toast.success("تم إعادة تسمية المحادثة");
+    } catch {
+      toast.error("تعذّر إعادة تسمية المحادثة");
+    }
+  };
+
   const handleSend = async (text: string) => {
     const content = text.trim();
     if (!content || sending) return;
@@ -205,6 +225,11 @@ export default function MizanApp() {
 
   const showEmpty = !activeId && messages.length === 0;
 
+  const handleLogout = () => {
+    logout();
+    navigate("/login", { replace: true });
+  };
+
   // ── Render ──
   return (
     <div className="h-screen w-full flex flex-col bg-mizan-bg text-gray-900 overflow-hidden">
@@ -241,6 +266,8 @@ export default function MizanApp() {
           }}
           onNew={handleNewChat}
           onDelete={handleDelete}
+          onRename={handleRename}
+          onLogout={handleLogout}
           mobileOpen={sidebarOpen}
           onCloseMobile={() => setSidebarOpen(false)}
         />
