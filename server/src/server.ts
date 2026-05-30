@@ -14,6 +14,18 @@ const PORT = parseInt(process.env.PORT ?? "8001", 10);
 const MONGO_URL = process.env.MONGO_URL ?? "mongodb://localhost:27017";
 const DB_NAME = process.env.DB_NAME ?? "mizan";
 const CHATBOT_LOCAL_URL = (process.env.CHATBOT_LOCAL_URL ?? "").trim();
+const USE_AZURE_ENDPOINT = (process.env.USE_AZURE_ENDPOINT ?? "true").toLowerCase() === "true";
+const AZURE_ML_ENDPOINT = (process.env.AZURE_ML_ENDPOINT ?? "").trim();
+const AZURE_ML_API_KEY = (process.env.AZURE_ML_API_KEY ?? "").trim();
+const AZURE_ML_DEPLOYMENT = (process.env.AZURE_ML_DEPLOYMENT ?? "").trim();
+const AZURE_TEMPERATURE = Number(process.env.AZURE_TEMPERATURE ?? "0.4");
+const AZURE_MAX_TOKENS = Number(process.env.AZURE_MAX_TOKENS ?? "128");
+const AZURE_FREQUENCY_PENALTY = Number(process.env.AZURE_FREQUENCY_PENALTY ?? "1.15");
+const AZURE_PRESENCE_PENALTY = Number(process.env.AZURE_PRESENCE_PENALTY ?? "1.0");
+const AZURE_INCLUDE_SYSTEM_PROMPT = (process.env.AZURE_INCLUDE_SYSTEM_PROMPT ?? "false").toLowerCase() === "true";
+const AZURE_HISTORY_MAX_MESSAGES = Number(process.env.AZURE_HISTORY_MAX_MESSAGES ?? "6");
+const AZURE_CONTEXT_WINDOW = Number(process.env.AZURE_CONTEXT_WINDOW ?? "512");
+const MODEL_HTTP_TIMEOUT_SECONDS = Number(process.env.MODEL_HTTP_TIMEOUT_SECONDS ?? "300");
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? "*").split(",");
 
 // ─── Zod Schemas ──────────────────────────────────────────────────────────────
@@ -31,7 +43,7 @@ export const MessageSchema = z.object({
   chat_id: z.string().uuid(),
   role: z.enum(["user", "assistant"]),
   content: z.string().min(1),
-  source: z.literal("local").optional(),
+  source: z.enum(["local", "local_url", "finetuned", "claude", "azure_endpoint"]).nullable().optional(),
   created_at: z.string().datetime(),
 });
 
@@ -80,6 +92,96 @@ async function connectMongo(): Promise<void> {
 
 // ─── LLM helpers ─────────────────────────────────────────────────────────────
 type HistoryItem = { role: "user" | "assistant"; content: string };
+
+function buildAzureHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    Authorization: `Bearer ${AZURE_ML_API_KEY}`,
+  };
+  if (AZURE_ML_DEPLOYMENT) {
+    headers["azureml-model-deployment"] = AZURE_ML_DEPLOYMENT;
+  }
+  return headers;
+}
+
+function buildAzureMessages(history: HistoryItem[]): Array<{ role: string; content: string }> {
+  const recent = AZURE_HISTORY_MAX_MESSAGES > 0 ? history.slice(-AZURE_HISTORY_MAX_MESSAGES) : history;
+  const msgs: Array<{ role: string; content: string }> = [];
+
+  if (AZURE_INCLUDE_SYSTEM_PROMPT) {
+    msgs.push({ role: "system", content: SYSTEM_PROMPT });
+  }
+
+  const approxTokens = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return 0;
+    return Math.max(1, trimmed.split(/\s+/).length);
+  };
+
+  const maxTokensForContext = Math.max(0, AZURE_CONTEXT_WINDOW - AZURE_MAX_TOKENS);
+  let used = msgs.reduce((sum, msg) => sum + approxTokens(msg.content) + 4, 0);
+
+  for (const item of recent) {
+    const cost = approxTokens(item.content) + 4;
+    if (used + cost > maxTokensForContext) continue;
+    msgs.push({ role: item.role, content: item.content });
+    used += cost;
+  }
+
+  return msgs;
+}
+
+async function callAzureChatbot(history: HistoryItem[]): Promise<string | null> {
+  if (!USE_AZURE_ENDPOINT || !AZURE_ML_ENDPOINT || !AZURE_ML_API_KEY) return null;
+
+  const payload = {
+    messages: buildAzureMessages(history),
+    temperature: AZURE_TEMPERATURE,
+    max_tokens: AZURE_MAX_TOKENS,
+    frequency_penalty: AZURE_FREQUENCY_PENALTY,
+    presence_penalty: AZURE_PRESENCE_PENALTY,
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MODEL_HTTP_TIMEOUT_SECONDS * 1000);
+    try {
+      const response = await fetch(AZURE_ML_ENDPOINT, {
+        method: "POST",
+        headers: buildAzureHeaders(),
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(`Azure HTTP ${response.status}: ${detail}`);
+      }
+
+      const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: unknown } }>;
+        error?: unknown;
+      };
+
+      if (data.error) {
+        throw new Error(`Azure endpoint error: ${String(data.error)}`);
+      }
+
+      const content = data.choices?.[0]?.message?.content;
+      if (typeof content === "string" && content.trim()) {
+        return content.trim();
+      }
+
+      throw new Error("Azure endpoint response missing expected choices/message content");
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (err) {
+    console.warn("Azure chatbot unreachable:", err);
+    return null;
+  }
+}
 
 async function callLocalChatbot(history: HistoryItem[]): Promise<string | null> {
   if (!CHATBOT_LOCAL_URL) return null;
@@ -225,12 +327,22 @@ api.post("/chat/stream", async (req, res) => {
 
   try {
     let replyText = "";
+    let source: "azure_endpoint" | "local_url" = "local_url";
 
-    // Try local chatbot
-    if (CHATBOT_LOCAL_URL) {
+    // Prefer Azure if configured, otherwise fall back to the local chatbot.
+    if (USE_AZURE_ENDPOINT && AZURE_ML_ENDPOINT && AZURE_ML_API_KEY) {
+      const azure = await callAzureChatbot(history);
+      if (azure) {
+        replyText = azure;
+        source = "azure_endpoint";
+      }
+    }
+
+    if (!replyText && CHATBOT_LOCAL_URL) {
       const local = await callLocalChatbot(history);
       if (local) {
         replyText = local;
+        source = "local_url";
         // Fake stream the local reply in chunks
         const step = 32;
         for (let i = 0; i < replyText.length; i += step) {
@@ -241,9 +353,19 @@ api.post("/chat/stream", async (req, res) => {
     }
 
     if (!replyText) {
-      sendEvent("error", { error: "No chatbot configured. Please set CHATBOT_LOCAL_URL." });
+      sendEvent("error", {
+        error: "No chatbot configured. Set Azure env vars or CHATBOT_LOCAL_URL.",
+      });
       res.end();
       return;
+    }
+
+    if (source === "azure_endpoint") {
+      const step = 32;
+      for (let i = 0; i < replyText.length; i += step) {
+        sendEvent("token", { text: replyText.slice(i, i + step) });
+        await new Promise((r) => setTimeout(r, 15));
+      }
     }
 
     // Persist assistant message
@@ -252,7 +374,7 @@ api.post("/chat/stream", async (req, res) => {
       chat_id,
       role: "assistant",
       content: replyText,
-      source: "local",
+      source,
       created_at: now(),
     };
     await db.collection("messages").insertOne({ ...aiMsg });
@@ -269,7 +391,7 @@ api.post("/chat/stream", async (req, res) => {
         { $set: { title: newTitle, updated_at: now() } }
       );
 
-    sendEvent("done", { message_id: aiMsg.id, source: "local" });
+    sendEvent("done", { message_id: aiMsg.id, source });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("Stream error:", message);

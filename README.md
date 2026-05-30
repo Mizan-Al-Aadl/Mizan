@@ -1,137 +1,96 @@
-<<<<<<< HEAD
-# Mizan — Lebanese Legal Assistant (ميزان)
+# Mizan
 
-> An Arabic chatbot specialized in **Lebanese law** and **international cases**, with conversation memory, document drafting (statements, contracts, pleadings), token-by-token streaming, and an optional **CPU-quantized** local LLM mode using a fine-tuned Llama-3 8B LoRA.
+Mizan is a Lebanese legal assistant with Arabic chat support, conversation history, and optional local model inference.
 
-## Project layout
+## Repository layout
 
-```
-mizan/
-├── frontend/      React + Tailwind + RTL Arabic UI (Amiri + Cairo fonts)
-├── backend/       FastAPI + MongoDB + Claude Sonnet 4.5 + GGUF (your model)
-├── server-node/   Node/Express + TypeScript equivalent of `backend/`
-└── chatbot/       LoRA → GGUF Q4_K_M quantization + local llama.cpp server
-```
+- `client/` - React + Vite frontend
+- `backend/` - FastAPI + MongoDB backend
+- `server/` - Node/Express + TypeScript alternative backend
+- `chatbot/` - Local GGUF quantization and inference tools
 
-You can run Mizan in **three modes**:
+## Recommended setup
 
-| Mode | Backend | LLM | Best for |
-|------|---------|-----|----------|
-| **A. Hosted (default)**  | `backend/` (FastAPI)   | Claude Sonnet 4.5 via Emergent Universal Key | Fast demos (5–10 s replies) |
-| **B. Fine-tuned in-process** | `backend/` (FastAPI) | Your `olaasm/mizan` GGUF loaded by llama-cpp-python | Use your own model, ~10 tok/s on a decent CPU |
-| **C. Local sidecar server** | `backend/` + `chatbot/server.py` | Your GGUF via a separate FastAPI process | Scale the LLM independently from the API |
+The default path is the FastAPI backend plus the React client.
 
-The backend always **falls back to Claude Sonnet 4.5** if the selected model errors out, so the website never goes down.
+### 1. Backend
 
----
-
-## 1. Frontend (React + Tailwind, RTL Arabic)
-
-```bash
-cd frontend
-yarn install
-yarn start    # http://localhost:3000
-```
-
-`.env`:
-```
-REACT_APP_BACKEND_URL=http://localhost:8001
-```
-
-Highlights:
-- Right-to-left layout, Amiri (display) + Cairo (body) fonts.
-- Sidebar on the right with chat history + "محادثة جديدة" button.
-- Empty state with 4 suggested legal prompts.
-- **Streaming token-by-token replies** with animated cursor.
-- Model toggle: Claude Sonnet 4.5 (fast) or your fine-tuned model (slower CPU inference).
-- Source badge on every assistant bubble showing which model produced the reply.
-- Disclaimer footer (not legal advice).
-
----
-
-## 2. Backend — FastAPI
-
-```bash
+```powershell
 cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 uvicorn server:app --host 0.0.0.0 --port 8001 --reload
 ```
 
-`.env`:
-```
-MONGO_URL=mongodb://localhost:27017
-DB_NAME=mizan
-EMERGENT_LLM_KEY=sk-emergent-...        # for Claude fallback
-USE_FINETUNED=false                     # true to use your GGUF by default
-FINETUNED_MODEL_PATH=/app/models/llama-3-8b-instruct.Q4_K_M.gguf
-FINETUNED_HF_REPO=olaasm/mizan
-FINETUNED_HF_FILE=llama-3-8b-instruct.Q4_K_M.gguf
-FINETUNED_N_CTX=2048
-FINETUNED_N_THREADS=6
-CHATBOT_LOCAL_URL=                      # optional sidecar server URL
-CORS_ORIGINS=*
-```
+Create `backend/.env` from `backend/.env.example` and set the values you need.
 
-Endpoints (all prefixed with `/api`):
+Common environment variables:
 
-- `GET  /health` — also reports whether the fine-tuned model is downloaded/loaded
-- `POST /chats` `{title?}`
-- `GET  /chats`
-- `GET  /chats/:id`
-- `DELETE /chats/:id`
-- `GET  /chats/:id/messages`
-- `POST /chat` `{chat_id, content, use_local?, use_finetuned?}` → returns full assistant Message
-- `POST /chat/stream` same payload → **text/event-stream** with `event: token` / `event: done` / `event: error`
+- `MONGO_URL`
+- `DB_NAME`
+- `USE_AZURE_ENDPOINT`
+- `AZURE_ML_ENDPOINT`
+- `AZURE_ML_API_KEY`
+- `AZURE_ML_DEPLOYMENT`
+- `USE_FINETUNED`
+- `FINETUNED_MODEL_PATH`
+- `FINETUNED_HF_REPO`
+- `FINETUNED_HF_FILE`
+- `CHATBOT_LOCAL_URL`
+- `CORS_ORIGINS`
 
-The backend keeps **full conversation memory** in MongoDB and re-feeds prior turns to the model on every call. Each assistant message stores a `source` field (`claude` / `finetuned` / `local_url`) so you can audit which model produced what.
-
-On first request with `use_finetuned: true`, the backend will auto-download the GGUF from `FINETUNED_HF_REPO` to `FINETUNED_MODEL_PATH` and cache it in RAM.
-
----
-
-## 3. Backend — Node/Express + TypeScript (`server-node/`)
-
-A line-for-line equivalent of the FastAPI backend if you prefer a pure JS stack.
+### 2. Frontend
 
 ```bash
-cd server-node
-cp .env.example .env
-# fill in ANTHROPIC_API_KEY (your real Anthropic key for the Node SDK)
-yarn install
-yarn dev      # http://localhost:8001
-# yarn build && yarn start   # production
+cd client
+npm install
+npm run dev
 ```
 
-> Note: The Emergent Universal Key works with the FastAPI backend via `emergentintegrations`. With the official Anthropic Node SDK you need a real Anthropic key.
+Create a client env file if you want to override the default API target:
 
----
+```env
+VITE_API_BASE_URL=/api
+VITE_BACKEND_URL=http://localhost:8001
+```
 
-## 4. Local quantized model on CPU (`chatbot/`)
+The frontend also supports optional timeout overrides:
 
-See **`chatbot/README.md`** for the full step-by-step. TL;DR:
+- `VITE_API_TIMEOUT_MS`
+- `VITE_STREAM_TIMEOUT_MS`
+
+### 3. Optional local model
+
+If you want to run the local GGUF chatbot, follow [`chatbot/README.md`](./chatbot/README.md) and then set `CHATBOT_LOCAL_URL` in `backend/.env`.
+
+## Alternative backend
+
+The `server/` folder contains a Node/Express + TypeScript backend. Use it if you prefer a JavaScript stack instead of FastAPI.
 
 ```bash
-cd chatbot
-pip install -r requirements.txt
-git clone https://github.com/ggerganov/llama.cpp.git && (cd llama.cpp && make -j)
-huggingface-cli login                          # accept Llama-3 license once
-python quantize.py \
-  --adapter ./results/baseline_lora \
-  --base meta-llama/Meta-Llama-3-8B-Instruct \
-  --llamacpp ./llama.cpp \
-  --quant Q4_K_M
-python server.py --model ./mizan-q4_k_m.gguf --port 8009
+cd server
+npm install
+npm run dev
 ```
 
-Then set `CHATBOT_LOCAL_URL=http://localhost:8009` in `backend/.env` and call `/api/chat` with `use_local: true`.
+## API
 
-> The published quantized model is on Hugging Face at **[`olaasm/mizan`](https://huggingface.co/olaasm/mizan)** (file: `llama-3-8b-instruct.Q4_K_M.gguf`, ~4.5 GB). The backend pulls it automatically on first use.
+The FastAPI backend exposes its routes under `/api`.
 
----
+Main endpoints:
 
-## Disclaimer
+- `GET /api/health`
+- `GET /api/chats`
+- `POST /api/chats`
+- `GET /api/chats/{chat_id}`
+- `DELETE /api/chats/{chat_id}`
+- `GET /api/chats/{chat_id}/messages`
+- `POST /api/chat`
+- `POST /api/chat/stream`
 
-Mizan is an educational/assistive tool. Its output **does not constitute official legal advice** and should not be relied upon for any binding legal decision. Always consult a licensed Lebanese attorney for specific cases.
-=======
-# Mizan
->>>>>>> e835640d266ede031f83ed6bec1fff9d69ab80d8
+## Notes
+
+- Do not commit local `.env` files.
+- Large generated artifacts such as virtual environments, build folders, and model exports should stay out of the repo.
+- Mizan is an educational tool and does not provide legal advice.

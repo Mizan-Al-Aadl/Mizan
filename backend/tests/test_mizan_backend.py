@@ -1,6 +1,6 @@
 """
 Mizan backend integration tests.
-Covers: health, chats CRUD, messages, Claude LLM responses (Arabic), memory.
+Covers: health, chats CRUD, messages, model responses (Arabic), memory.
 """
 import os
 import time
@@ -85,7 +85,7 @@ class TestChats:
         assert d.status_code == 404
 
 
-# ---------- Chat / Claude LLM ----------
+# ---------- Chat / model ----------
 class TestChatLLM:
     @pytest.fixture(scope="class")
     def chat_id(self, created_chat_ids):
