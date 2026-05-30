@@ -1,9 +1,9 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { loginSchema, type LoginFormData } from "@/schemas/auth";
+import AuthSubmitButton from "./AuthSubmitButton";
+import FormField from "./FormField";
 
 interface LoginFormProps {
   onSubmit: (data: LoginFormData) => Promise<void>;
@@ -30,25 +30,19 @@ export default function LoginForm({ onSubmit, error }: LoginFormProps) {
         </div>
       ) : null}
 
-      <div>
-        <Label htmlFor="email">البريد الإلكتروني</Label>
+      <FormField id="email" label="البريد الإلكتروني" error={errors.email?.message}>
         <Input id="email" type="email" autoComplete="email" {...register("email")} />
-        {errors.email ? (
-          <p className="mt-2 text-sm text-red-600">{errors.email.message}</p>
-        ) : null}
-      </div>
+      </FormField>
 
-      <div>
-        <Label htmlFor="password">كلمة المرور</Label>
+      <FormField id="password" label="كلمة المرور" error={errors.password?.message}>
         <Input id="password" type="password" autoComplete="current-password" {...register("password")} />
-        {errors.password ? (
-          <p className="mt-2 text-sm text-red-600">{errors.password.message}</p>
-        ) : null}
-      </div>
+      </FormField>
 
-      <Button type="submit" className="w-full" disabled={isSubmitting}>
-        {isSubmitting ? "جاري تسجيل الدخول..." : "تسجيل الدخول"}
-      </Button>
+      <AuthSubmitButton
+        isSubmitting={isSubmitting}
+        label="تسجيل الدخول"
+        submittingLabel="جاري تسجيل الدخول..."
+      />
     </form>
   );
 }

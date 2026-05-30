@@ -1,9 +1,10 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { registerSchema, type RegisterFormData } from "@/schemas/auth";
+import AuthSubmitButton from "./AuthSubmitButton";
+import FormField from "./FormField";
+import PasswordRequirements from "./PasswordRequirements";
 
 interface RegisterFormProps {
   onSubmit: (data: RegisterFormData) => Promise<void>;
@@ -53,45 +54,28 @@ export default function RegisterForm({ onSubmit, error }: RegisterFormProps) {
         </div>
       ) : null}
 
-      <div>
-        <Label htmlFor="name">الاسم</Label>
+      <FormField id="name" label="الاسم" error={errors.name?.message}>
         <Input id="name" type="text" {...register("name")} />
-        {errors.name ? (
-          <p className="mt-2 text-sm text-red-600">{errors.name.message}</p>
-        ) : null}
-      </div>
+      </FormField>
 
-      <div>
-        <Label htmlFor="email">البريد الإلكتروني</Label>
+      <FormField id="email" label="البريد الإلكتروني" error={errors.email?.message}>
         <Input id="email" type="email" autoComplete="email" {...register("email")} />
-        {errors.email ? (
-          <p className="mt-2 text-sm text-red-600">{errors.email.message}</p>
-        ) : null}
-      </div>
+      </FormField>
 
-      <div>
-        <Label htmlFor="password">كلمة المرور</Label>
+      <FormField id="password" label="كلمة المرور">
         <Input id="password" type="password" autoComplete="new-password" {...register("password")} />
-        {passwordValidationMessages.length > 0 ? (
-          <ul className="mt-2 list-disc pl-5 text-sm text-red-600 space-y-1">
-            {passwordValidationMessages.map((message) => (
-              <li key={message}>{message}</li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
+        <PasswordRequirements messages={passwordValidationMessages} />
+      </FormField>
 
-      <div>
-        <Label htmlFor="confirmPassword">تأكيد كلمة المرور</Label>
+      <FormField id="confirmPassword" label="تأكيد كلمة المرور" error={errors.confirmPassword?.message}>
         <Input id="confirmPassword" type="password" autoComplete="new-password" {...register("confirmPassword")} />
-        {errors.confirmPassword ? (
-          <p className="mt-2 text-sm text-red-600">{errors.confirmPassword.message}</p>
-        ) : null}
-      </div>
+      </FormField>
 
-      <Button type="submit" className="w-full" disabled={isSubmitting}>
-        {isSubmitting ? "جاري إنشاء الحساب..." : "إنشاء حساب"}
-      </Button>
+      <AuthSubmitButton
+        isSubmitting={isSubmitting}
+        label="إنشاء حساب"
+        submittingLabel="جاري إنشاء الحساب..."
+      />
     </form>
   );
 }
