@@ -18,7 +18,7 @@ const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 15000);
 const STREAM_TIMEOUT_MS = Number(import.meta.env.VITE_STREAM_TIMEOUT_MS ?? 180000); // Increased from 60s to 180s for Azure processing time
 
 function parseApiErrorBody(body: string): string {
-  if (!body) return "حدث خطأ غير متوقع";
+  if (!body) return "An unexpected error occurred.";
   try {
     const json = JSON.parse(body);
     const detail = json.detail || json.error || json.message;
@@ -33,9 +33,9 @@ function parseApiErrorBody(body: string): string {
 
 function buildApiErrorMessage(status: number, body: string): string {
   const detail = parseApiErrorBody(body);
-  if (status === 401 || status === 409) return "البريد الإلكتروني أو كلمة المرور غير صحيحة.";
-  if (status === 400) return detail || "البيانات غير صحيحة، يرجى التحقق من الحقول.";
-  if (status >= 500) return "حدث خطأ في الخادم. حاول مرة أخرى لاحقًا.";
+  if (status === 401 || status === 409) return "Email or password is incorrect.";
+  if (status === 400) return detail || "Invalid data. Please check the form fields.";
+  if (status >= 500) return "Server error occurred. Please try again later.";
   return detail;
 }
 
