@@ -25,18 +25,18 @@ export default function RegisterForm({ onSubmit, error }: RegisterFormProps) {
   const passwordValue = watch("password", "");
   const passwordValidationMessages = errors.password
     ? [
-        passwordValue.length < 8 ? "كلمة المرور يجب أن تكون على الأقل 8 أحرف" : null,
+        passwordValue.length < 8 ? "Password must be at least 8 characters." : null,
         !/[A-Z]/.test(passwordValue)
-          ? "يجب أن تحتوي كلمة المرور على حرف كبير واحد على الأقل"
+          ? "Password must contain at least one uppercase letter."
           : null,
         !/[a-z]/.test(passwordValue)
-          ? "يجب أن تحتوي كلمة المرور على حرف صغير واحد على الأقل"
+          ? "Password must contain at least one lowercase letter."
           : null,
         !/[0-9]/.test(passwordValue)
-          ? "يجب أن تحتوي كلمة المرور على رقم واحد على الأقل"
+          ? "Password must contain at least one number."
           : null,
         !/[!@#$%^&*()_+\-=[\]{};:'"\\|,.<>/?`~]/.test(passwordValue)
-          ? "يجب أن تحتوي كلمة المرور على رمز خاص واحد على الأقل"
+          ? "Password must contain at least one special character."
           : null,
       ].filter((message): message is string => Boolean(message))
     : [];
@@ -54,27 +54,27 @@ export default function RegisterForm({ onSubmit, error }: RegisterFormProps) {
         </div>
       ) : null}
 
-      <FormField id="name" label="الاسم" error={errors.name?.message}>
+      <FormField id="name" label="Name" error={errors.name?.message}>
         <Input id="name" type="text" {...register("name")} />
       </FormField>
 
-      <FormField id="email" label="البريد الإلكتروني" error={errors.email?.message}>
+      <FormField id="email" label="Email" error={errors.email?.message}>
         <Input id="email" type="email" autoComplete="email" {...register("email")} />
       </FormField>
 
-      <FormField id="password" label="كلمة المرور">
+      <FormField id="password" label="Password">
         <Input id="password" type="password" autoComplete="new-password" {...register("password")} />
         <PasswordRequirements messages={passwordValidationMessages} />
       </FormField>
 
-      <FormField id="confirmPassword" label="تأكيد كلمة المرور" error={errors.confirmPassword?.message}>
+      <FormField id="confirmPassword" label="Confirm Password" error={errors.confirmPassword?.message}>
         <Input id="confirmPassword" type="password" autoComplete="new-password" {...register("confirmPassword")} />
       </FormField>
 
       <AuthSubmitButton
         isSubmitting={isSubmitting}
-        label="إنشاء حساب"
-        submittingLabel="جاري إنشاء الحساب..."
+        label="Create account"
+        submittingLabel="Creating account..."
       />
     </form>
   );

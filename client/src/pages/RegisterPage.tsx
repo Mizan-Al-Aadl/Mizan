@@ -18,12 +18,12 @@ export default function RegisterPage() {
   const getRegisterErrorMessage = (err: unknown) => {
     if (err instanceof Error) {
       const message = err.message;
-      if (message.includes("API 409")) return "هذا البريد الإلكتروني مسجل بالفعل.";
-      if (message.includes("API 400")) return "البيانات غير صحيحة، يرجى التحقق من الحقول.";
-      if (message.includes("API 500")) return "حدث خطأ في الخادم. حاول مرة أخرى لاحقًا.";
+      if (message.includes("API 409")) return "This email is already registered.";
+      if (message.includes("API 400")) return "Invalid data. Please check the form fields.";
+      if (message.includes("API 500")) return "Server error occurred. Please try again later.";
       return message.replace(/^API \d+:\s*/, "");
     }
-    return "حدث خطأ أثناء إنشاء الحساب.";
+    return "An error occurred while creating your account.";
   };
 
   const handleSubmit = async (data: RegisterFormData) => {
@@ -40,7 +40,7 @@ export default function RegisterPage() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
         <div className="rounded-lg border border-slate-200 bg-white px-6 py-5 text-sm text-slate-700 shadow-sm">
-          جارٍ التحقق من المصادقة...
+          Checking authentication...
         </div>
       </div>
     );
@@ -50,14 +50,14 @@ export default function RegisterPage() {
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10">
       <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-lg">
         <div className="mb-6 space-y-2 text-center">
-          <h1 className="text-2xl font-semibold">إنشاء حساب</h1>
-          <p className="text-sm text-slate-500">سجّل للبدء في الدردشة القانونية الخاصة بك.</p>
+          <h1 className="text-2xl font-semibold">Create an account</h1>
+          <p className="text-sm text-slate-500">Sign up to start your legal chat experience.</p>
         </div>
         <RegisterForm onSubmit={handleSubmit} error={error} />
         <p className="mt-6 text-center text-sm text-slate-600">
-          لديك حساب بالفعل؟{' '}
+          Already have an account?{' '}
           <Link to="/login" className="font-medium text-slate-900 underline">
-            تسجيل الدخول
+            Log in
           </Link>
         </p>
       </div>

@@ -30,18 +30,18 @@ export default function LoginForm({ onSubmit, error }: LoginFormProps) {
         </div>
       ) : null}
 
-      <FormField id="email" label="البريد الإلكتروني" error={errors.email?.message}>
+      <FormField id="email" label="Email" error={errors.email?.message}>
         <Input id="email" type="email" autoComplete="email" {...register("email")} />
       </FormField>
 
-      <FormField id="password" label="كلمة المرور" error={errors.password?.message}>
+      <FormField id="password" label="Password" error={errors.password?.message}>
         <Input id="password" type="password" autoComplete="current-password" {...register("password")} />
       </FormField>
 
       <AuthSubmitButton
         isSubmitting={isSubmitting}
-        label="تسجيل الدخول"
-        submittingLabel="جاري تسجيل الدخول..."
+        label="Log in"
+        submittingLabel="Logging in..."
       />
     </form>
   );
