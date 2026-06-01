@@ -15,7 +15,7 @@ export const MessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string(),
   source: z
-    .enum(["local", "local_url", "finetuned", "claude", "azure_endpoint"])
+    .enum(["local", "local_url", "finetuned", "claude", "gemini_rag"])
     .nullable()
     .optional(),
   created_at: z.string(),
@@ -53,7 +53,7 @@ export type SendMessageInput = z.infer<typeof SendMessageSchema>;
 export const TokenEventSchema = z.object({ text: z.string() });
 export const DoneEventSchema = z.object({
   message_id: z.string(),
-  source: z.enum(["local", "local_url", "finetuned", "claude", "azure_endpoint"]),
+  source: z.enum(["local", "local_url", "finetuned", "claude", "gemini_rag"]),
 });
 export const ErrorEventSchema = z.object({ error: z.string() });
 

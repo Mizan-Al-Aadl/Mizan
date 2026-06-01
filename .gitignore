@@ -121,6 +121,7 @@ chatbot/results/outputs/
 memory/
 design_guidelines.json
 .emergent/
+**/law_dataset.csv
 
 # ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store

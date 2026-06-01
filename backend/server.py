@@ -1,4 +1,5 @@
-﻿import os
+﻿import csv
+import os
 import json
 import uuid
 import asyncio
@@ -49,6 +50,32 @@ FINETUNED_N_THREADS = int(os.environ.get("FINETUNED_N_THREADS", "4"))
 
 CHATBOT_LOCAL_URL = os.environ.get("CHATBOT_LOCAL_URL", "").strip()
 
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
+GEMINI_MODEL_CANDIDATES = [
+    candidate.strip()
+    for candidate in os.environ.get(
+        "GEMINI_MODEL_CANDIDATES",
+        ",".join(
+            [
+                GEMINI_MODEL,
+                "gemini-2.5-flash",
+                "gemini-1.5-flash-002",
+                "gemini-1.5-pro",
+                "gemini-1.5-pro-002",
+            ]
+        ),
+    ).split(",")
+    if candidate.strip()
+]
+LAW_DATASET_PATH = os.environ.get("LAW_DATASET_PATH", "../law_dataset.csv").strip()
+RAG_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))
+RAG_MAX_CONTEXT_CHARS = int(os.environ.get("RAG_MAX_CONTEXT_CHARS", "6000"))
+GEMINI_TEMPERATURE = float(os.environ.get("GEMINI_TEMPERATURE", "0.2"))
+GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "512"))
+GEMINI_REQUEST_MAX_RETRIES = int(os.environ.get("GEMINI_REQUEST_MAX_RETRIES", "2"))
+GEMINI_RETRY_BACKOFF_BASE = float(os.environ.get("GEMINI_RETRY_BACKOFF_BASE", "1.5"))
+
 AZURE_ML_ENDPOINT = os.environ.get("AZURE_ML_ENDPOINT", "").strip()
 AZURE_ML_API_KEY = os.environ.get("AZURE_ML_API_KEY", "").strip()
 AZURE_ML_DEPLOYMENT = os.environ.get("AZURE_ML_DEPLOYMENT", "").strip()
@@ -68,6 +95,8 @@ AZURE_RETRY_BACKOFF_BASE = float(os.environ.get("AZURE_RETRY_BACKOFF_BASE", "1.5
 
 _llm_instance = None
 _llm_lock = asyncio.Lock()
+_law_dataset_cache: Optional[List[dict]] = None
+_law_dataset_lock = threading.Lock()
 
 client = AsyncIOMotorClient(
     MONGO_URL,
@@ -226,6 +255,345 @@ async def _call_local_chatbot(history: List[dict]) -> Optional[str]:
     except Exception as e:
         logger.warning("Local chatbot unreachable: %s", e)
         return None
+
+
+def _resolve_law_dataset_path() -> Path:
+    path = Path(LAW_DATASET_PATH)
+    if not path.is_absolute():
+        path = (ROOT_DIR / path).resolve()
+    return path
+
+
+def _normalize_rag_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").lower()).strip()
+
+
+def _tokenize_rag_text(text: str) -> List[str]:
+    return re.findall(r"[\u0600-\u06FF\w]+", _normalize_rag_text(text))
+
+
+def _load_law_dataset() -> List[dict]:
+    global _law_dataset_cache
+    if _law_dataset_cache is not None:
+        return _law_dataset_cache
+
+    with _law_dataset_lock:
+        if _law_dataset_cache is not None:
+            return _law_dataset_cache
+
+        dataset_path = _resolve_law_dataset_path()
+        if not dataset_path.exists():
+            logger.warning("Law dataset not found at %s", dataset_path)
+            _law_dataset_cache = []
+            return _law_dataset_cache
+
+        records: List[dict] = []
+        try:
+            with dataset_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                for index, row in enumerate(reader, start=1):
+                    text_parts = [
+                        str(row.get("questions", "") or "").strip(),
+                        str(row.get("Instruction", "") or "").strip(),
+                        str(row.get("output_text", "") or "").strip(),
+                        str(row.get("input_text", "") or "").strip(),
+                    ]
+                    combined_text = "\n".join(part for part in text_parts if part)
+                    if not combined_text:
+                        continue
+
+                    normalized_text = _normalize_rag_text(combined_text)
+                    records.append(
+                        {
+                            "index": index,
+                            "row": row,
+                            "type": _normalize_rag_text(str(row.get("type", "") or "")),
+                            "text": combined_text,
+                            "normalized": normalized_text,
+                            "tokens": set(_tokenize_rag_text(combined_text)),
+                        }
+                    )
+        except Exception as e:
+            logger.exception("Failed to load law dataset from %s: %s", dataset_path, e)
+            records = []
+
+        _law_dataset_cache = records
+        logger.info("Loaded %d law dataset rows from %s", len(records), dataset_path)
+        return _law_dataset_cache
+
+
+def _score_law_record(query_text: str, query_tokens: set[str], record: dict) -> int:
+    score = len(query_tokens.intersection(record["tokens"]))
+    normalized_record = record["normalized"]
+    record_type = record.get("type", "")
+
+    if record_type == "law":
+        score += 18
+    elif record_type == "case":
+        score -= 8
+
+    if query_text and query_text in normalized_record:
+        score += 12
+
+    boosted_phrases = (
+        "قانون العمل",
+        "الصرف من الخدمة",
+        "تعويض الصرف",
+        "تعويض الصرف من الخدمة",
+        "الصرف التعسفي",
+        "فصل تعسفي",
+    )
+    for phrase in boosted_phrases:
+        if phrase in normalized_record:
+            score += 8
+
+    row = record["row"]
+    for field in ("questions", "Instruction", "type", "nationality"):
+        value = _normalize_rag_text(str(row.get(field, "") or ""))
+        if value and value in query_text:
+            score += 3
+
+    return score
+
+
+def _retrieve_law_context(query_text: str, top_k: int) -> List[dict]:
+    records = _load_law_dataset()
+    if not records:
+        return []
+
+    normalized_query = _normalize_rag_text(query_text)
+    query_tokens = set(_tokenize_rag_text(normalized_query))
+
+    scored_records = [
+        (_score_law_record(normalized_query, query_tokens, record), record)
+        for record in records
+    ]
+    scored_records.sort(key=lambda item: (item[0], len(item[1]["text"])), reverse=True)
+
+    selected = [record for score, record in scored_records if score > 0]
+    law_selected = [record for record in selected if record.get("type") == "law"]
+
+    if law_selected:
+        return law_selected[:top_k]
+    if selected:
+        return selected[:top_k]
+    return [record for _, record in scored_records[:top_k]]
+
+
+def _format_rag_context(records: List[dict]) -> str:
+    if not records:
+        return ""
+
+    sections: List[str] = []
+    total_chars = 0
+
+    for idx, record in enumerate(records, start=1):
+        row = record["row"]
+        header = str(row.get("Instruction", "") or row.get("type", "") or f"Document {record['index']}").strip()
+        details = [f"[{idx}] {header}"]
+
+        for field in ("nationality", "questions", "type"):
+            value = str(row.get(field, "") or "").strip()
+            if value:
+                details.append(f"{field}: {value}")
+
+        input_text = str(row.get("input_text", "") or "").strip()
+        output_text = str(row.get("output_text", "") or "").strip()
+        if input_text:
+            details.append(f"law_text: {input_text}")
+        if output_text:
+            details.append(f"reference_answer: {output_text}")
+
+        block = "\n".join(details).strip()
+        if not block:
+            continue
+
+        if total_chars + len(block) > RAG_MAX_CONTEXT_CHARS:
+            remaining = max(0, RAG_MAX_CONTEXT_CHARS - total_chars)
+            if remaining <= 0:
+                break
+            block = block[:remaining].rstrip()
+
+        sections.append(block)
+        total_chars += len(block)
+
+        if total_chars >= RAG_MAX_CONTEXT_CHARS:
+            break
+
+    return "\n\n".join(sections)
+
+
+def _build_gemini_prompt(history: List[dict], context: str) -> str:
+    recent_history = history[-6:]
+    history_lines = []
+    for message in recent_history:
+        role = message.get("role", "user")
+        label = "User" if role == "user" else "Assistant"
+        content = str(message.get("content", "") or "").strip()
+        if content:
+            history_lines.append(f"{label}: {content}")
+
+    history_text = "\n".join(history_lines).strip()
+    context_text = context.strip() if context.strip() else "No closely matching passages were found in the dataset."
+
+    return (
+        "Use only the retrieved Lebanese law context below to answer the user. "
+        "If the answer is not supported by the dataset, say that you could not find it in the law_dataset.\n\n"
+        f"Retrieved context:\n{context_text}\n\n"
+        f"Recent conversation:\n{history_text or 'No prior conversation.'}\n\n"
+        "Answer the latest user question in Arabic, cite article numbers when present, and keep the answer grounded in the dataset."
+    )
+
+
+def _extract_reply_from_gemini(data: dict) -> Optional[str]:
+    candidates = data.get("candidates") or []
+    for candidate in candidates:
+        content = candidate.get("content") or {}
+        parts = content.get("parts") or []
+        text = "".join(part.get("text", "") for part in parts if isinstance(part, dict))
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return None
+
+
+async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
+    if not GEMINI_API_KEY:
+        return None
+
+    query_text = "\n".join(str(message.get("content", "") or "") for message in history[-6:]).strip()
+    records = _retrieve_law_context(query_text, max(1, RAG_TOP_K))
+    context = _format_rag_context(records)
+
+    # If no retrieved context is available, fall back to a generative prompt
+    # so the model can answer from its general knowledge instead of replying
+    # that nothing was found in the dataset.
+    generative_mode = not bool(context.strip())
+
+    if generative_mode:
+        # Use recent user messages as the query for a generative answer.
+        prompt_contents = query_text or (history[-1].get("content", "") if history else "")
+        payload = {
+            "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt_contents}]}],
+            "generationConfig": {
+                "temperature": GEMINI_TEMPERATURE,
+                "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
+            },
+        }
+    else:
+        prompt = _build_gemini_prompt(history, context)
+        payload = {
+            "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": GEMINI_TEMPERATURE,
+                "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
+            },
+        }
+
+    try:
+        async with httpx.AsyncClient(timeout=MODEL_HTTP_TIMEOUT_SECONDS) as cx:
+            last_error_message = ""
+            for model_name in GEMINI_MODEL_CANDIDATES:
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model_name}:generateContent?key={GEMINI_API_KEY}"
+                )
+                data = None
+
+                try:
+                    last_exc = None
+                    for attempt in range(1, GEMINI_REQUEST_MAX_RETRIES + 2):
+                        try:
+                            response = await cx.post(url, json=payload)
+                            response.raise_for_status()
+                            data = response.json()
+                            break
+                        except httpx.HTTPStatusError as e:
+                            status = getattr(e.response, "status_code", None)
+                            detail = ""
+                            try:
+                                detail = e.response.text[:500]
+                            except Exception:
+                                detail = ""
+
+                            if status == 404:
+                                last_error_message = f"{model_name}: {detail or 'model not available'}"
+                                logger.warning("Gemini model %s unavailable, trying next candidate", model_name)
+                                break
+
+                            if status in {408, 429, 500, 502, 503, 504} and attempt <= GEMINI_REQUEST_MAX_RETRIES:
+                                backoff = GEMINI_RETRY_BACKOFF_BASE ** (attempt - 1)
+                                logger.warning("Gemini HTTP %s on attempt %s for %s, retrying after %.1fs", status, attempt, model_name, backoff)
+                                await asyncio.sleep(backoff)
+                                last_exc = e
+                                continue
+                            raise
+                        except httpx.TimeoutException as e:
+                            if attempt <= GEMINI_REQUEST_MAX_RETRIES:
+                                backoff = GEMINI_RETRY_BACKOFF_BASE ** (attempt - 1)
+                                logger.warning("Gemini request timed out on attempt %s for %s, retrying after %.1fs", attempt, model_name, backoff)
+                                await asyncio.sleep(backoff)
+                                last_exc = e
+                                continue
+                            raise
+
+                    if last_exc is not None and not isinstance(last_exc, httpx.HTTPStatusError):
+                        raise last_exc
+
+                    if data is None:
+                        continue
+
+                    if isinstance(data, dict):
+                        error = data.get("error")
+                        if error:
+                            last_error_message = f"{model_name}: {error}"
+                            continue
+
+                        reply = _extract_reply_from_gemini(data)
+                        if reply:
+                            return reply
+
+                        block_reason = (data.get("promptFeedback") or {}).get("blockReason")
+                        if block_reason:
+                            last_error_message = f"{model_name}: blocked ({block_reason})"
+                            continue
+
+                    last_error_message = f"{model_name}: Gemini response missing expected content"
+                except httpx.HTTPStatusError as e:
+                    detail = ""
+                    try:
+                        detail = e.response.text[:500]
+                    except Exception:
+                        detail = ""
+                    last_error_message = f"{model_name}: HTTP {e.response.status_code}: {detail}"
+                    continue
+
+        raise RuntimeError(
+            "Gemini response missing expected content. Tried models: "
+            f"{', '.join(GEMINI_MODEL_CANDIDATES)}. Last error: {last_error_message}"
+        )
+    except httpx.HTTPStatusError as e:
+        detail = ""
+        try:
+            detail = e.response.text[:500]
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"Gemini HTTP {e.response.status_code}: {detail}")
+    except httpx.TimeoutException:
+        raise RuntimeError(f"Gemini request timed out after {MODEL_HTTP_TIMEOUT_SECONDS} seconds")
+    except Exception as e:
+        raise RuntimeError(f"Gemini API unreachable: {e}")
+
+
+async def _stream_gemini_rag(history: List[dict]) -> AsyncGenerator[str, None]:
+    reply = await _call_gemini_rag(history)
+    if not reply:
+        raise RuntimeError("Gemini API unreachable or returned empty reply")
+
+    for part in re.findall(r"\S+\s*", reply):
+        yield part
+        await asyncio.sleep(0.01)
 
 
 def _azure_headers() -> dict:
@@ -656,14 +1024,19 @@ async def root():
 
 @api.get("/health")
 async def health():
+    dataset_records = _load_law_dataset()
     return {
         "status": "ok",
         "local_chatbot": bool(CHATBOT_LOCAL_URL),
-        "azure": {
-            "enabled": USE_AZURE_ENDPOINT,
-            "configured": bool(AZURE_ML_ENDPOINT and AZURE_ML_API_KEY),
-            "endpoint": AZURE_ML_ENDPOINT,
-            "deployment": AZURE_ML_DEPLOYMENT,
+        "llm": "configured" if GEMINI_API_KEY else "missing",
+        "rag": {
+            "enabled": bool(GEMINI_API_KEY),
+            "configured": bool(GEMINI_API_KEY and dataset_records),
+            "model": GEMINI_MODEL,
+            "dataset_path": str(_resolve_law_dataset_path()),
+            "dataset_loaded": bool(dataset_records),
+            "dataset_rows": len(dataset_records),
+            "top_k": RAG_TOP_K,
         },
         "finetuned": {
             "enabled": USE_FINETUNED,
@@ -823,23 +1196,23 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
 
     reply_text: Optional[str] = None
     source = "unavailable"
-    azure_error: Optional[str] = None
+    gemini_error: Optional[str] = None
 
     if body.use_local:
         reply_text = await _call_local_chatbot(history)
         if reply_text is not None:
             source = "local_url"
 
-    if reply_text is None and (body.use_azure or USE_AZURE_ENDPOINT):
+    if reply_text is None and GEMINI_API_KEY:
         try:
-            reply_text = await _call_azure_endpoint(history)
+            reply_text = await _call_gemini_rag(history)
             if reply_text is not None:
-                source = "azure_endpoint"
+                source = "gemini_rag"
             else:
-                azure_error = "Azure endpoint is not configured"
+                gemini_error = "Gemini API is not configured"
         except Exception as e:
-            azure_error = str(e)
-            logger.warning("Azure call failed: %s", azure_error)
+            gemini_error = str(e)
+            logger.warning("Gemini call failed: %s", gemini_error)
 
     if reply_text is None and (body.use_finetuned or USE_FINETUNED):
         reply_text = await _call_finetuned(history)
@@ -849,7 +1222,7 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
     if reply_text is None:
         raise HTTPException(
             503,
-            azure_error or "No available model response. Ensure Azure endpoint is reachable or enable local/fine-tuned model.",
+            gemini_error or "No available model response. Ensure Gemini is configured or enable local/fine-tuned model.",
         )
 
     ai_msg = Message(chat_id=body.chat_id, role="assistant", content=reply_text, source=source)
@@ -880,23 +1253,23 @@ async def send_message_stream(body: SendMessageBody, current_user: UserOut = Dep
     logger.info("History for chat %s: found %d messages", body.chat_id, len(history_docs))
 
     use_local_now = body.use_local and bool(CHATBOT_LOCAL_URL)
-    use_azure_now = (body.use_azure or USE_AZURE_ENDPOINT) and not use_local_now
-    use_finetuned_now = (body.use_finetuned or USE_FINETUNED) and not use_local_now and not use_azure_now
+    use_gemini_now = bool(GEMINI_API_KEY) and not use_local_now
+    use_finetuned_now = (body.use_finetuned or USE_FINETUNED) and not use_local_now and not use_gemini_now
 
     async def event_gen():
         full_chunks: List[str] = []
-        source = "local_url" if use_local_now else ("azure_endpoint" if use_azure_now else "finetuned")
+        source = "local_url" if use_local_now else ("gemini_rag" if use_gemini_now else "finetuned")
         try:
             if use_local_now:
                 gen = _stream_local(history)
-            elif use_azure_now:
-                gen = _stream_azure(history)
+            elif use_gemini_now:
+                gen = _stream_gemini_rag(history)
             elif use_finetuned_now:
                 gen = _stream_finetuned(history)
             else:
                 raise HTTPException(
                     503,
-                    "No available model response. Ensure Azure endpoint is reachable or enable local/fine-tuned model.",
+                    "No available model response. Ensure Gemini is configured or enable local/fine-tuned model.",
                 )
 
             async for token in _with_keepalive(gen, STREAM_KEEPALIVE_SECONDS):

@@ -16,8 +16,8 @@ export default function MessageBubble({
 }: MessageBubbleProps) {
   const isUser = role === "user";
   const sourceLabel =
-    source === "azure_endpoint"
-      ? "Azure Endpoint"
+    source === "gemini_rag"
+      ? "Gemini RAG"
       : source === "finetuned"
       ? "Mizan Fine-tuned"
       : source === "claude"

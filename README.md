@@ -24,12 +24,15 @@ Common environment variables:
 
 - `MONGO_URL`
 - `DB_NAME`
-- `USE_AZURE_ENDPOINT`
-- `AZURE_ML_ENDPOINT`
-- `AZURE_ML_API_KEY`
-- `AZURE_ML_DEPLOYMENT`
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL`
+- `GEMINI_MODEL_CANDIDATES`
+- `LAW_DATASET_PATH`
+- `RAG_TOP_K`
 - `CHATBOT_LOCAL_URL`
 - `CORS_ORIGINS`
+
+Keep `law_dataset.csv` local. It is ignored by git and used only for retrieval during answer generation.
 
 ### 2. Frontend
 

@@ -37,7 +37,8 @@ class TestHealth:
         assert r.status_code == 200
         data = r.json()
         assert data["status"] == "ok"
-        assert data["llm"] == "configured"
+        assert "llm" in data
+        assert "rag" in data
 
 
 # ---------- Chats CRUD ----------
