@@ -70,7 +70,8 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           data-testid="send-btn"
           onClick={submit}
           disabled={disabled || !value.trim()}
-          className="btn btn-primary btn-sm p-3 rounded-xl self-center m-1 flex items-center justify-center flex-shrink-0 disabled:opacity-40"          aria-label="إرسال"
+          className="btn btn-primary btn-sm h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 disabled:opacity-40"
+          aria-label="إرسال"
         >
           {disabled ? (
             <Loader2 className="w-5 h-5 animate-spin" />
