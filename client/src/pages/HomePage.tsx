@@ -9,13 +9,13 @@ export default function HomePage() {
           <div className="p-10 lg:p-16">
             <div className="inline-flex items-center gap-2 rounded-full bg-primary/10 px-4 py-2 text-sm font-medium text-primary mb-6">
               <Scale className="w-4 h-4 text-primary" />
-              Lebanese legal assistant for Arabic and English questions
+              Lebanese legal assistant for Arabic questions
             </div>
             <h1 className="text-4xl sm:text-5xl font-semibold tracking-tight text-base-content mb-6">
               Mizan — Legal assistance with Lebanese law
             </h1>
             <p className="max-w-2xl text-base leading-8 text-base-content/70 mb-8">
-              Ask legal questions, review your case, and get clear answers in Arabic or English. Use Mizan as a starting point for Lebanese legal guidance, backed by local regulations and article references.
+              Ask legal questions, review your case, and get clear answers in Arabic. Use Mizan as a starting point for Lebanese legal guidance, backed by local regulations and article references.
             </p>
             <div className="flex flex-col sm:flex-row items-start gap-4">
               <Link
@@ -46,7 +46,7 @@ export default function HomePage() {
               </p>
               <ul className="space-y-3 text-sm text-primary-content/80">
                 <li>• Built for Lebanese legal context</li>
-                <li>• Supports Arabic and English input</li>
+                <li>• Supports Arabic input</li>
                 <li>• Private chats and history</li>
                 <li>• Fast AI-powered responses</li>
               </ul>
