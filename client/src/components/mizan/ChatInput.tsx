@@ -43,7 +43,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   return (
     <div data-testid="chat-input-container" className="sticky bottom-0 pt-6 pb-3">
       {error && (
-        <p className="text-error text-xs font-cairo mb-1 text-right px-1">
+        <p className="text-error text-xs font-cairo mb-1 text-left px-1">
           {error}
         </p>
       )}
@@ -57,7 +57,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
         <textarea
           ref={taRef}
           data-testid="message-input"
-          dir="rtl"
+          dir="auto"
           value={value}
           onChange={onInput}
           onKeyDown={onKey}
@@ -70,7 +70,8 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           data-testid="send-btn"
           onClick={submit}
           disabled={disabled || !value.trim()}
-          className="btn btn-primary btn-sm p-3 rounded-xl self-center m-1 flex items-center justify-center flex-shrink-0 disabled:opacity-40"          aria-label="إرسال"
+          className="btn btn-primary btn-sm h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 disabled:opacity-40"
+          aria-label="إرسال"
         >
           {disabled ? (
             <Loader2 className="w-5 h-5 animate-spin" />

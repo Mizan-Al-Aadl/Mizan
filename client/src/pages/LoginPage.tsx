@@ -11,7 +11,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      navigate("/", { replace: true });
+      navigate("/app", { replace: true });
     }
   }, [isAuthenticated, isLoading, navigate]);
 
@@ -30,7 +30,7 @@ export default function LoginPage() {
     setError(null);
     try {
       await login(data.email, data.password);
-      navigate("/", { replace: true });
+      navigate("/app", { replace: true });
     } catch (err) {
       setError(getLoginErrorMessage(err));
     }
@@ -38,8 +38,8 @@ export default function LoginPage() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
-        <div className="rounded-lg border border-slate-200 bg-white px-6 py-5 text-sm text-slate-700 shadow-sm">
+      <div dir="ltr" className="flex min-h-screen items-center justify-center bg-base-100 p-4 font-sans">
+        <div className="rounded-lg border border-base-200 bg-base-100 px-6 py-5 text-sm text-base-content shadow-sm">
           Checking authentication...
         </div>
       </div>
@@ -47,16 +47,16 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10">
-      <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-lg">
+    <div dir="ltr" className="flex min-h-screen items-center justify-center bg-base-100 px-4 py-10 font-sans">
+      <div className="w-full max-w-md rounded-3xl border border-base-200 bg-base-100 p-8 shadow-lg">
         <div className="mb-6 space-y-2 text-center">
-          <h1 className="text-2xl font-semibold">Log in to Mizan</h1>
-          <p className="text-sm text-slate-500">Enter your email and password to continue.</p>
+          <h1 className="text-2xl font-semibold text-base-content">Log in to Mizan</h1>
+          <p className="text-sm text-base-content/70">Enter your email and password to continue.</p>
         </div>
         <LoginForm onSubmit={handleSubmit} error={error} />
-        <p className="mt-6 text-center text-sm text-slate-600">
+        <p className="mt-6 text-center text-sm text-base-content/70">
           Don't have an account?{' '}
-          <Link to="/register" className="font-medium text-slate-900 underline">
+          <Link to="/register" className="font-medium text-primary underline">
             Create one
           </Link>
         </p>
