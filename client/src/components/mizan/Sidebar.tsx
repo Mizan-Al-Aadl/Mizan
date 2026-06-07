@@ -1,4 +1,5 @@
 import { Plus, Scale, Trash2, MessageSquare, X, Edit3, LogOut } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useState } from "react";
 import type { Chat } from "@/types";
 
@@ -69,9 +70,9 @@ export default function Sidebar({
         <div className="flex items-center justify-between p-4 border-b border-base-300">
           <div className="flex items-center gap-2">
             <Scale className="w-6 h-6 text-primary" />
-            <span className="font-amiri text-3xl font-bold text-primary leading-none">
+            <Link to="/" className="font-amiri text-3xl font-bold text-primary leading-none hover:underline">
               ميزان
-            </span>
+            </Link>
           </div>
           <button
             data-testid="close-sidebar-btn"
