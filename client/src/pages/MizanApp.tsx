@@ -4,10 +4,7 @@ import { toast } from "sonner";
 import {
   Plus,
   Menu,
-  Sparkles,
-  FileText,
-  Gavel,
-  BookOpen,
+  MessageCircleQuestion,
   Loader2,
 } from "lucide-react";
 
@@ -31,26 +28,26 @@ import ChatInput from "@/components/mizan/ChatInput";
 // ─── Suggested prompts ────────────────────────────────────────────────────────
 const SUGGESTED = [
   {
-    icon: FileText,
-    title: "سؤال 1",
+    icon: MessageCircleQuestion,
+    title: "هل يمكن للمحلّل المدين أن يقوم ببيع العقار المضمون دون الحصول على الموافقة الدائرة التنفيذ؟",
     prompt:
       "هل يمكن للمحلّل المدين أن يقوم ببيع العقار المضمون دون الحصول على الموافقة الدائرة التنفيذ؟",
   },
   {
-    icon: BookOpen,
-    title: "سؤال 2",
+    icon: MessageCircleQuestion,
+    title: "ما هي القاعدة التي يُفسر بها مضمون الفقرة الأولى من المادة الثانية من قانون التحكيم والمصالحة المدنيين؟",
     prompt:
       "ما هي القاعدة التي يُفسر بها مضمون الفقرة الأولى من المادة الثانية من قانون التحكيم والمصالحة المدنيين؟",
   },
   {
-    icon: Gavel,
-    title: "سؤال 3",
+    icon: MessageCircleQuestion,
+    title: "هل يحق لمالك العقار الطعن بطريقة تنظيم محاضر الكشوفات التي قام بها المسؤولون؟",
     prompt:
       "هل يحق لمالك العقار الطعن بطريقة تنظيم محاضر الكشوفات التي قام بها المسؤولون؟",
   },
   {
-    icon: Sparkles,
-    title: "سؤال 4",
+    icon: MessageCircleQuestion,
+    title: "ما هي الإجراءات التي يجب اتباعها من قبل المدين الذي تم إنذاره ولم يتمكن من الدفع حتى نهاية المهلة؟",
     prompt:
       "ما هي الإجراءات التي يجب اتباعها من قبل المدين الذي تم إنذاره ولم يتمكن من الدفع حتى نهاية المهلة؟",
   },
