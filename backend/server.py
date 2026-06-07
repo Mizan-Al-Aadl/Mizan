@@ -1,5 +1,6 @@
 ﻿import csv
 import os
+import sys
 import json
 import uuid
 import asyncio
@@ -28,7 +29,10 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict
 
 ROOT_DIR = Path(__file__).parent
+sys.path.insert(0, str(ROOT_DIR.parent))
 load_dotenv(ROOT_DIR / ".env")
+
+from chatbot.shortCircuit import get_short_circuit_response
 
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "mizan")
@@ -1198,16 +1202,23 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
     source = "unavailable"
     gemini_error: Optional[str] = None
 
-    if body.use_local:
+    short_reply = get_short_circuit_response(body.content.strip())
+    if short_reply is not None:
+        reply_text = short_reply
+        source = "short_circuit"
+        logger.info("Reply selected from static response (short_circuit) chat_id=%s user=%s", body.chat_id, current_user.id)
+    elif body.use_local:
         reply_text = await _call_local_chatbot(history)
         if reply_text is not None:
             source = "local_url"
+            logger.info("Reply selected from local chatbot URL chat_id=%s user=%s", body.chat_id, current_user.id)
 
     if reply_text is None and GEMINI_API_KEY:
         try:
             reply_text = await _call_gemini_rag(history)
             if reply_text is not None:
                 source = "gemini_rag"
+                logger.info("Reply selected from Gemini RAG chat_id=%s user=%s", body.chat_id, current_user.id)
             else:
                 gemini_error = "Gemini API is not configured"
         except Exception as e:
@@ -1218,6 +1229,7 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
         reply_text = await _call_finetuned(history)
         if reply_text is not None:
             source = "finetuned"
+            logger.info("Reply selected from finetuned model chat_id=%s user=%s", body.chat_id, current_user.id)
 
     if reply_text is None:
         raise HTTPException(
@@ -1256,9 +1268,32 @@ async def send_message_stream(body: SendMessageBody, current_user: UserOut = Dep
     use_gemini_now = bool(GEMINI_API_KEY) and not use_local_now
     use_finetuned_now = (body.use_finetuned or USE_FINETUNED) and not use_local_now and not use_gemini_now
 
+    short_reply = get_short_circuit_response(body.content.strip())
+    if short_reply is not None:
+        async def event_gen():
+            source = "short_circuit"
+            logger.info("Streaming reply selected from static response (short_circuit) chat_id=%s user=%s", body.chat_id, current_user.id)
+            ai_msg = Message(chat_id=body.chat_id, role="assistant", content=short_reply, source=source)
+            await db.messages.insert_one(ai_msg.model_dump())
+
+            new_title = chat.get("title", "محادثة جديدة")
+            if new_title == "محادثة جديدة":
+                new_title = await _generate_title_from_first_message(body.content)
+            await db.chats.update_one({"id": body.chat_id}, {"$set": {"title": new_title, "updated_at": datetime.now(timezone.utc).isoformat()}})
+
+            yield f"event: token\ndata: {json.dumps({'text': short_reply}, ensure_ascii=False)}\n\n"
+            yield f"event: done\ndata: {json.dumps({'message_id': ai_msg.id, 'source': source}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            event_gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
     async def event_gen():
         full_chunks: List[str] = []
         source = "local_url" if use_local_now else ("gemini_rag" if use_gemini_now else "finetuned")
+        logger.info("Streaming reply selected from %s chat_id=%s user=%s", source, body.chat_id, current_user.id)
         try:
             if use_local_now:
                 gen = _stream_local(history)
