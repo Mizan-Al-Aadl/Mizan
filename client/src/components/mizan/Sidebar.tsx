@@ -56,8 +56,8 @@ export default function Sidebar({
       <aside
         data-testid="sidebar"
         className={`
-          ${mobileOpen ? "translate-x-0" : "translate-x-[-100%] md:translate-x-0"}
-          ${mobileOpen ? "pointer-events-auto" : "pointer-events-none md:pointer-events-auto"}
+          ${mobileOpen ? "translate-x-0" : "hidden"}
+          ${mobileOpen ? "pointer-events-auto" : "pointer-events-none"}
           fixed md:static top-0 right-0 z-50 md:z-auto
           h-full w-72 md:w-80
           bg-base-200 border-l border-base-300
@@ -75,7 +75,7 @@ export default function Sidebar({
           </div>
           <button
             data-testid="close-sidebar-btn"
-            className="md:hidden btn btn-ghost btn-sm btn-square"
+            className="btn btn-ghost btn-sm btn-square"
             onClick={onCloseMobile}
             aria-label="إغلاق القائمة"
           >
