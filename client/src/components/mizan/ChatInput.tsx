@@ -43,7 +43,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   return (
     <div data-testid="chat-input-container" className="sticky bottom-0 pt-6 pb-3">
       {error && (
-        <p className="text-error text-xs font-cairo mb-1 text-right px-1">
+        <p className="text-error text-xs font-cairo mb-1 text-left px-1">
           {error}
         </p>
       )}
@@ -57,7 +57,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
         <textarea
           ref={taRef}
           data-testid="message-input"
-          dir="rtl"
+          dir="auto"
           value={value}
           onChange={onInput}
           onKeyDown={onKey}

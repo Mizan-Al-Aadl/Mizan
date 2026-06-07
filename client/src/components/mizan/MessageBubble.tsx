@@ -39,6 +39,7 @@ export default function MessageBubble({
 
       {/* Bubble */}
       <div
+        dir="auto"
         className={`
           font-cairo text-base leading-relaxed whitespace-pre-wrap break-words
           max-w-[85%] sm:max-w-[75%] p-4 sm:p-5 shadow-sm
