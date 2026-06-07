@@ -1,0 +1,8 @@
+{
+  "name": "mizan-backend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "..\\.venv\\Scripts\\python.exe -m uvicorn server:app --host 0.0.0.0 --port 8000 --reload"
+  }
+}
