@@ -1,4 +1,4 @@
-import { Scale, User, Bot } from "lucide-react";
+import { Scale, User } from "lucide-react";
 import type { Message } from "@/types";
 
 interface MessageBubbleProps {
@@ -11,18 +11,9 @@ interface MessageBubbleProps {
 export default function MessageBubble({
   role,
   content,
-  source,
   streaming = false,
 }: MessageBubbleProps) {
   const isUser = role === "user";
-  const sourceLabel =
-    source === "gemini_rag"
-      ? "Gemini RAG"
-      : source === "finetuned"
-      ? "Mizan Fine-tuned"
-      : source === "claude"
-      ? "Claude Fallback"
-      : "Mizan Local";
 
   return (
     <div
@@ -48,6 +39,7 @@ export default function MessageBubble({
 
       {/* Bubble */}
       <div
+        dir="auto"
         className={`
           font-cairo text-base leading-relaxed whitespace-pre-wrap break-words
           max-w-[85%] sm:max-w-[75%] p-4 sm:p-5 shadow-sm
@@ -68,16 +60,6 @@ export default function MessageBubble({
           />
         )}
 
-        {/* Source badge */}
-        {!isUser && source && !streaming && (
-          <div
-            data-testid={`source-${source}`}
-            className="mt-3 pt-2 border-t border-base-200 flex items-center gap-1.5 text-[11px] font-cairo text-base-content/40"
-          >
-            <Bot className="w-3 h-3" />
-            {sourceLabel}
-          </div>
-        )}
       </div>
     </div>
   );

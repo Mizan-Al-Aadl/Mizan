@@ -1,4 +1,5 @@
 import { Plus, Scale, Trash2, MessageSquare, X, Edit3, LogOut } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useState } from "react";
 import type { Chat } from "@/types";
 
@@ -56,8 +57,8 @@ export default function Sidebar({
       <aside
         data-testid="sidebar"
         className={`
-          ${mobileOpen ? "translate-x-0" : "translate-x-[-100%] md:translate-x-0"}
-          ${mobileOpen ? "pointer-events-auto" : "pointer-events-none md:pointer-events-auto"}
+          ${mobileOpen ? "translate-x-0" : "hidden"}
+          ${mobileOpen ? "pointer-events-auto" : "pointer-events-none"}
           fixed md:static top-0 right-0 z-50 md:z-auto
           h-full w-72 md:w-80
           bg-base-200 border-l border-base-300
@@ -69,13 +70,13 @@ export default function Sidebar({
         <div className="flex items-center justify-between p-4 border-b border-base-300">
           <div className="flex items-center gap-2">
             <Scale className="w-6 h-6 text-primary" />
-            <span className="font-amiri text-3xl font-bold text-primary leading-none">
+            <Link to="/" className="font-amiri text-3xl font-bold text-primary leading-none hover:underline">
               ميزان
-            </span>
+            </Link>
           </div>
           <button
             data-testid="close-sidebar-btn"
-            className="md:hidden btn btn-ghost btn-sm btn-square"
+            className="btn btn-ghost btn-sm btn-square"
             onClick={onCloseMobile}
             aria-label="إغلاق القائمة"
           >

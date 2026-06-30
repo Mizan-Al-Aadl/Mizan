@@ -4,10 +4,7 @@ import { toast } from "sonner";
 import {
   Plus,
   Menu,
-  Sparkles,
-  FileText,
-  Gavel,
-  BookOpen,
+  MessageCircleQuestion,
   Loader2,
 } from "lucide-react";
 
@@ -31,26 +28,26 @@ import ChatInput from "@/components/mizan/ChatInput";
 // ─── Suggested prompts ────────────────────────────────────────────────────────
 const SUGGESTED = [
   {
-    icon: FileText,
-    title: "سؤال 1",
+    icon: MessageCircleQuestion,
+    title: "هل يمكن للمحلّل المدين أن يقوم ببيع العقار المضمون دون الحصول على الموافقة الدائرة التنفيذ؟",
     prompt:
       "هل يمكن للمحلّل المدين أن يقوم ببيع العقار المضمون دون الحصول على الموافقة الدائرة التنفيذ؟",
   },
   {
-    icon: BookOpen,
-    title: "سؤال 2",
+    icon: MessageCircleQuestion,
+    title: "ما هي القاعدة التي يُفسر بها مضمون الفقرة الأولى من المادة الثانية من قانون التحكيم والمصالحة المدنيين؟",
     prompt:
       "ما هي القاعدة التي يُفسر بها مضمون الفقرة الأولى من المادة الثانية من قانون التحكيم والمصالحة المدنيين؟",
   },
   {
-    icon: Gavel,
-    title: "سؤال 3",
+    icon: MessageCircleQuestion,
+    title: "هل يحق لمالك العقار الطعن بطريقة تنظيم محاضر الكشوفات التي قام بها المسؤولون؟",
     prompt:
       "هل يحق لمالك العقار الطعن بطريقة تنظيم محاضر الكشوفات التي قام بها المسؤولون؟",
   },
   {
-    icon: Sparkles,
-    title: "سؤال 4",
+    icon: MessageCircleQuestion,
+    title: "ما هي الإجراءات التي يجب اتباعها من قبل المدين الذي تم إنذاره ولم يتمكن من الدفع حتى نهاية المهلة؟",
     prompt:
       "ما هي الإجراءات التي يجب اتباعها من قبل المدين الذي تم إنذاره ولم يتمكن من الدفع حتى نهاية المهلة؟",
   },
@@ -63,7 +60,9 @@ export default function MizanApp() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [sending, setSending] = useState(false);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth >= 768 : true
+  );
   const [streamingText, setStreamingText] = useState("");
 
   const { logout } = useAuth();
@@ -109,6 +108,17 @@ export default function MizanApp() {
     })();
   }, [activeId]);
 
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 768px)");
+    const handleMediaChange = (event: MediaQueryListEvent) => {
+      setSidebarOpen(event.matches);
+    };
+
+    setSidebarOpen(mediaQuery.matches);
+    mediaQuery.addEventListener("change", handleMediaChange);
+    return () => mediaQuery.removeEventListener("change", handleMediaChange);
+  }, []);
+
   // Auto-scroll to bottom
   useEffect(() => {
     if (scrollRef.current) {
@@ -123,7 +133,9 @@ export default function MizanApp() {
       setChats((prev) => [c, ...prev]);
       setActiveId(c.id);
       setMessages([]);
-      setSidebarOpen(false);
+      if (window.innerWidth < 768) {
+        setSidebarOpen(false);
+      }
     } catch {
       toast.error("تعذّر إنشاء محادثة جديدة");
     }
@@ -262,7 +274,9 @@ export default function MizanApp() {
           activeId={activeId}
           onSelect={(id) => {
             setActiveId(id);
-            setSidebarOpen(false);
+            if (window.innerWidth < 768) {
+              setSidebarOpen(false);
+            }
           }}
           onNew={handleNewChat}
           onDelete={handleDelete}
@@ -273,6 +287,22 @@ export default function MizanApp() {
         />
 
         <main className="flex-1 flex flex-col min-w-0 relative">
+          {!sidebarOpen && (
+            <div className="hidden md:flex items-center justify-between px-6 py-3 border-b border-black/5 bg-mizan-bg/90">
+              <button
+                data-testid="open-sidebar-btn-desktop"
+                onClick={() => setSidebarOpen(true)}
+                className="p-2 rounded-lg hover:bg-black/5"
+                aria-label="فتح القائمة"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+              <span className="font-amiri text-2xl font-bold text-mizan-green">
+                ميزان
+              </span>
+              <div className="w-10" />
+            </div>
+          )}
           {/* Messages area */}
           <div
             ref={scrollRef}
