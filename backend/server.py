@@ -30,72 +30,128 @@ from pydantic import BaseModel, Field, ConfigDict
 
 ROOT_DIR = Path(__file__).parent
 sys.path.insert(0, str(ROOT_DIR.parent))
-load_dotenv(ROOT_DIR / ".env")
+load_dotenv(ROOT_DIR / ".env", override=False)
 
 from chatbot.shortCircuit import get_short_circuit_response
 
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.environ.get("DB_NAME", "mizan")
-MONGO_SERVER_SELECTION_TIMEOUT_MS = int(os.environ.get("MONGO_SERVER_SELECTION_TIMEOUT_MS", "5000"))
-JWT_SECRET = os.environ.get("JWT_SECRET", "change-me")
-JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
-JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", str(60 * 24 * 7)))
+MONGO_URL = "mongodb://localhost:27017"
+DB_NAME = "mizan"
+MONGO_SERVER_SELECTION_TIMEOUT_MS = 5000
+JWT_SECRET = "change-me"
+JWT_ALGORITHM = "HS256"
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
-USE_FINETUNED = os.environ.get("USE_FINETUNED", "false").lower() == "true"
-FINETUNED_MODEL_PATH = os.environ.get(
-    "FINETUNED_MODEL_PATH", "C:/tmp/mizan-chatbot/mizan-q4_k_m.gguf"
-)
-FINETUNED_HF_REPO = os.environ.get("FINETUNED_HF_REPO", "olaasm/mizan")
-FINETUNED_HF_FILE = os.environ.get(
-    "FINETUNED_HF_FILE", "llama-3-8b-instruct.Q4_K_M.gguf"
-)
-FINETUNED_N_CTX = int(os.environ.get("FINETUNED_N_CTX", "2048"))
-FINETUNED_N_THREADS = int(os.environ.get("FINETUNED_N_THREADS", "4"))
+USE_FINETUNED = False
+FINETUNED_MODEL_PATH = "C:/tmp/mizan-chatbot/mizan-q4_k_m.gguf"
+FINETUNED_HF_REPO = "olaasm/mizan"
+FINETUNED_HF_FILE = "llama-3-8b-instruct.Q4_K_M.gguf"
+FINETUNED_N_CTX = 2048
+FINETUNED_N_THREADS = 4
 
-CHATBOT_LOCAL_URL = os.environ.get("CHATBOT_LOCAL_URL", "").strip()
+CHATBOT_LOCAL_URL = ""
+GEMINI_API_KEY = ""
+GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL_CANDIDATES = []
+LAW_DATASET_PATH = "../law_dataset.csv"
+RAG_TOP_K = 5
+RAG_MAX_CONTEXT_CHARS = 6000
+GEMINI_TEMPERATURE = 0.2
+GEMINI_MAX_OUTPUT_TOKENS = 512
+GEMINI_REQUEST_MAX_RETRIES = 2
+GEMINI_RETRY_BACKOFF_BASE = 1.5
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
-GEMINI_MODEL_CANDIDATES = [
-    candidate.strip()
-    for candidate in os.environ.get(
-        "GEMINI_MODEL_CANDIDATES",
-        ",".join(
-            [
-                GEMINI_MODEL,
-                "gemini-2.5-flash",
-                "gemini-1.5-flash-002",
-                "gemini-1.5-pro",
-                "gemini-1.5-pro-002",
-            ]
-        ),
-    ).split(",")
-    if candidate.strip()
-]
-LAW_DATASET_PATH = os.environ.get("LAW_DATASET_PATH", "../law_dataset.csv").strip()
-RAG_TOP_K = int(os.environ.get("RAG_TOP_K", "5"))
-RAG_MAX_CONTEXT_CHARS = int(os.environ.get("RAG_MAX_CONTEXT_CHARS", "6000"))
-GEMINI_TEMPERATURE = float(os.environ.get("GEMINI_TEMPERATURE", "0.2"))
-GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "512"))
-GEMINI_REQUEST_MAX_RETRIES = int(os.environ.get("GEMINI_REQUEST_MAX_RETRIES", "2"))
-GEMINI_RETRY_BACKOFF_BASE = float(os.environ.get("GEMINI_RETRY_BACKOFF_BASE", "1.5"))
+AZURE_ML_ENDPOINT = ""
+AZURE_ML_API_KEY = ""
+AZURE_ML_DEPLOYMENT = ""
+USE_AZURE_ENDPOINT = True
+AZURE_TEMPERATURE = 0.4
+AZURE_MAX_TOKENS = 128
+AZURE_FREQUENCY_PENALTY = 1.15
+AZURE_PRESENCE_PENALTY = 1.0
+AZURE_INCLUDE_SYSTEM_PROMPT = False
+AZURE_HISTORY_MAX_MESSAGES = 6
+AZURE_CONTEXT_WINDOW = 512
+AZURE_AUTO_CONTINUE_ROUNDS = 2
+MODEL_HTTP_TIMEOUT_SECONDS = 60
+STREAM_KEEPALIVE_SECONDS = 10
+AZURE_REQUEST_MAX_RETRIES = 2
+AZURE_RETRY_BACKOFF_BASE = 1.5
 
-AZURE_ML_ENDPOINT = os.environ.get("AZURE_ML_ENDPOINT", "").strip()
-AZURE_ML_API_KEY = os.environ.get("AZURE_ML_API_KEY", "").strip()
-AZURE_ML_DEPLOYMENT = os.environ.get("AZURE_ML_DEPLOYMENT", "").strip()
-USE_AZURE_ENDPOINT = os.environ.get("USE_AZURE_ENDPOINT", "true").lower() == "true"
-AZURE_TEMPERATURE = float(os.environ.get("AZURE_TEMPERATURE", "0.4"))
-AZURE_MAX_TOKENS = int(os.environ.get("AZURE_MAX_TOKENS", "128"))
-AZURE_FREQUENCY_PENALTY = float(os.environ.get("AZURE_FREQUENCY_PENALTY", "1.15"))
-AZURE_PRESENCE_PENALTY = float(os.environ.get("AZURE_PRESENCE_PENALTY", "1.0"))
-AZURE_INCLUDE_SYSTEM_PROMPT = os.environ.get("AZURE_INCLUDE_SYSTEM_PROMPT", "false").lower() == "true"
-AZURE_HISTORY_MAX_MESSAGES = int(os.environ.get("AZURE_HISTORY_MAX_MESSAGES", "6"))
-AZURE_CONTEXT_WINDOW = int(os.environ.get("AZURE_CONTEXT_WINDOW", "512"))
-AZURE_AUTO_CONTINUE_ROUNDS = int(os.environ.get("AZURE_AUTO_CONTINUE_ROUNDS", "2"))
-MODEL_HTTP_TIMEOUT_SECONDS = float(os.environ.get("MODEL_HTTP_TIMEOUT_SECONDS", "60"))
-STREAM_KEEPALIVE_SECONDS = float(os.environ.get("STREAM_KEEPALIVE_SECONDS", "10"))
-AZURE_REQUEST_MAX_RETRIES = int(os.environ.get("AZURE_REQUEST_MAX_RETRIES", "2"))
-AZURE_RETRY_BACKOFF_BASE = float(os.environ.get("AZURE_RETRY_BACKOFF_BASE", "1.5"))
+
+def _refresh_settings_from_env() -> None:
+    global MONGO_URL, DB_NAME, MONGO_SERVER_SELECTION_TIMEOUT_MS, JWT_SECRET, JWT_ALGORITHM
+    global JWT_ACCESS_TOKEN_EXPIRE_MINUTES, USE_FINETUNED, FINETUNED_MODEL_PATH, FINETUNED_HF_REPO
+    global FINETUNED_HF_FILE, FINETUNED_N_CTX, FINETUNED_N_THREADS, CHATBOT_LOCAL_URL, GEMINI_API_KEY
+    global GEMINI_MODEL, GEMINI_MODEL_CANDIDATES, LAW_DATASET_PATH, RAG_TOP_K, RAG_MAX_CONTEXT_CHARS
+    global GEMINI_TEMPERATURE, GEMINI_MAX_OUTPUT_TOKENS, GEMINI_REQUEST_MAX_RETRIES, GEMINI_RETRY_BACKOFF_BASE
+    global AZURE_ML_ENDPOINT, AZURE_ML_API_KEY, AZURE_ML_DEPLOYMENT, USE_AZURE_ENDPOINT, AZURE_TEMPERATURE
+    global AZURE_MAX_TOKENS, AZURE_FREQUENCY_PENALTY, AZURE_PRESENCE_PENALTY, AZURE_INCLUDE_SYSTEM_PROMPT
+    global AZURE_HISTORY_MAX_MESSAGES, AZURE_CONTEXT_WINDOW, AZURE_AUTO_CONTINUE_ROUNDS, MODEL_HTTP_TIMEOUT_SECONDS
+    global STREAM_KEEPALIVE_SECONDS, AZURE_REQUEST_MAX_RETRIES, AZURE_RETRY_BACKOFF_BASE
+
+    load_dotenv(ROOT_DIR / ".env", override=True)
+
+    MONGO_URL = os.getenv("MONGO_URL", MONGO_URL).strip()
+    DB_NAME = os.getenv("DB_NAME", DB_NAME).strip()
+    MONGO_SERVER_SELECTION_TIMEOUT_MS = int(os.getenv("MONGO_SERVER_SELECTION_TIMEOUT_MS", str(MONGO_SERVER_SELECTION_TIMEOUT_MS)))
+    JWT_SECRET = os.getenv("JWT_SECRET", JWT_SECRET).strip()
+    JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", JWT_ALGORITHM).strip()
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", str(JWT_ACCESS_TOKEN_EXPIRE_MINUTES)))
+
+    USE_FINETUNED = os.getenv("USE_FINETUNED", "false").lower() == "true"
+    FINETUNED_MODEL_PATH = os.getenv("FINETUNED_MODEL_PATH", FINETUNED_MODEL_PATH).strip()
+    FINETUNED_HF_REPO = os.getenv("FINETUNED_HF_REPO", FINETUNED_HF_REPO).strip()
+    FINETUNED_HF_FILE = os.getenv("FINETUNED_HF_FILE", FINETUNED_HF_FILE).strip()
+    FINETUNED_N_CTX = int(os.getenv("FINETUNED_N_CTX", str(FINETUNED_N_CTX)))
+    FINETUNED_N_THREADS = int(os.getenv("FINETUNED_N_THREADS", str(FINETUNED_N_THREADS)))
+
+    CHATBOT_LOCAL_URL = os.getenv("CHATBOT_LOCAL_URL", CHATBOT_LOCAL_URL).strip().strip('"').strip("'")
+
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", GEMINI_API_KEY).strip().strip('"').strip("'")
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", GEMINI_MODEL).strip()
+    GEMINI_MODEL_CANDIDATES = [
+        candidate.strip()
+        for candidate in os.getenv(
+            "GEMINI_MODEL_CANDIDATES",
+            ",".join(
+                [
+                    GEMINI_MODEL,
+                    "gemini-2.5-flash",
+                    "gemini-1.5-flash-002",
+                    "gemini-1.5-pro",
+                    "gemini-1.5-pro-002",
+                ]
+            ),
+        ).split(",")
+        if candidate.strip()
+    ]
+    LAW_DATASET_PATH = os.getenv("LAW_DATASET_PATH", LAW_DATASET_PATH).strip()
+    RAG_TOP_K = int(os.getenv("RAG_TOP_K", str(RAG_TOP_K)))
+    RAG_MAX_CONTEXT_CHARS = int(os.getenv("RAG_MAX_CONTEXT_CHARS", str(RAG_MAX_CONTEXT_CHARS)))
+    GEMINI_TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", str(GEMINI_TEMPERATURE)))
+    GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", str(GEMINI_MAX_OUTPUT_TOKENS)))
+    GEMINI_REQUEST_MAX_RETRIES = int(os.getenv("GEMINI_REQUEST_MAX_RETRIES", str(GEMINI_REQUEST_MAX_RETRIES)))
+    GEMINI_RETRY_BACKOFF_BASE = float(os.getenv("GEMINI_RETRY_BACKOFF_BASE", str(GEMINI_RETRY_BACKOFF_BASE)))
+
+    AZURE_ML_ENDPOINT = os.getenv("AZURE_ML_ENDPOINT", AZURE_ML_ENDPOINT).strip().strip('"').strip("'")
+    AZURE_ML_API_KEY = os.getenv("AZURE_ML_API_KEY", AZURE_ML_API_KEY).strip().strip('"').strip("'")
+    AZURE_ML_DEPLOYMENT = os.getenv("AZURE_ML_DEPLOYMENT", AZURE_ML_DEPLOYMENT).strip().strip('"').strip("'")
+    USE_AZURE_ENDPOINT = os.getenv("USE_AZURE_ENDPOINT", "true").lower() == "true"
+    AZURE_TEMPERATURE = float(os.getenv("AZURE_TEMPERATURE", str(AZURE_TEMPERATURE)))
+    AZURE_MAX_TOKENS = int(os.getenv("AZURE_MAX_TOKENS", str(AZURE_MAX_TOKENS)))
+    AZURE_FREQUENCY_PENALTY = float(os.getenv("AZURE_FREQUENCY_PENALTY", str(AZURE_FREQUENCY_PENALTY)))
+    AZURE_PRESENCE_PENALTY = float(os.getenv("AZURE_PRESENCE_PENALTY", str(AZURE_PRESENCE_PENALTY)))
+    AZURE_INCLUDE_SYSTEM_PROMPT = os.getenv("AZURE_INCLUDE_SYSTEM_PROMPT", "false").lower() == "true"
+    AZURE_HISTORY_MAX_MESSAGES = int(os.getenv("AZURE_HISTORY_MAX_MESSAGES", str(AZURE_HISTORY_MAX_MESSAGES)))
+    AZURE_CONTEXT_WINDOW = int(os.getenv("AZURE_CONTEXT_WINDOW", str(AZURE_CONTEXT_WINDOW)))
+    AZURE_AUTO_CONTINUE_ROUNDS = int(os.getenv("AZURE_AUTO_CONTINUE_ROUNDS", str(AZURE_AUTO_CONTINUE_ROUNDS)))
+    MODEL_HTTP_TIMEOUT_SECONDS = float(os.getenv("MODEL_HTTP_TIMEOUT_SECONDS", str(MODEL_HTTP_TIMEOUT_SECONDS)))
+    STREAM_KEEPALIVE_SECONDS = float(os.getenv("STREAM_KEEPALIVE_SECONDS", str(STREAM_KEEPALIVE_SECONDS)))
+    AZURE_REQUEST_MAX_RETRIES = int(os.getenv("AZURE_REQUEST_MAX_RETRIES", str(AZURE_REQUEST_MAX_RETRIES)))
+    AZURE_RETRY_BACKOFF_BASE = float(os.getenv("AZURE_RETRY_BACKOFF_BASE", str(AZURE_RETRY_BACKOFF_BASE)))
+
+
+_refresh_settings_from_env()
 
 _llm_instance = None
 _llm_lock = asyncio.Lock()
@@ -109,14 +165,32 @@ client = AsyncIOMotorClient(
 db = client[DB_NAME]
 
 # Configure logging to output to stderr with proper formatting
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    force=True,
+)
 logger = logging.getLogger("mizan")
 logger.setLevel(logging.INFO)
-handler = logging.StreamHandler()
-handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-handler.setFormatter(formatter)
+logger.propagate = True
 if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    handler.setFormatter(formatter)
     logger.addHandler(handler)
+
+logger.info("Backend logging initialized; gemini_configured=%s", bool(GEMINI_API_KEY))
+
+
+def _log_answer_source(source: str, chat_id: str, user_id: str, reply_text: Optional[str]) -> None:
+    preview = (reply_text or "").strip().replace("\n", " ")[:120]
+    logger.info("Answer source=%s chat_id=%s user=%s preview=%s", source, chat_id, user_id, preview or "<empty>")
+
+
+def _log_message_event(chat_id: str, user_id: str, role: str, origin: str, message_text: Optional[str]) -> None:
+    preview = (message_text or "").strip().replace("\n", " ")[:120]
+    logger.info("MessageEvent chat_id=%s role=%s origin=%s user=%s preview=%s", chat_id, role, origin, user_id, preview or "<empty>")
 
 # Initialize translator for Arabic translation (lazy-loaded)
 translator = None
@@ -130,6 +204,14 @@ async def _get_translator():
 
 app = FastAPI(title="Mizan API")
 api = APIRouter(prefix="/api")
+
+
+@app.middleware("http")
+async def refresh_settings_middleware(request: Request, call_next):
+    _refresh_settings_from_env()
+    logger.info("Incoming %s %s | gemini_configured=%s", request.method, request.url.path, bool(GEMINI_API_KEY))
+    response = await call_next(request)
+    return response
 
 SYSTEM_PROMPT = """You are Mizan, a Lebanese legal assistant specialized in Lebanese law. Answer all questions based exclusively on Lebanese laws. Cite article numbers. You will receive questions in both Arabic and English. Always respond in Arabic."""
 
@@ -1194,6 +1276,7 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
 
     user_msg = Message(chat_id=body.chat_id, role="user", content=body.content.strip())
     await db.messages.insert_one(user_msg.model_dump())
+    _log_message_event(body.chat_id, current_user.id, "user", "client", body.content.strip())
 
     history_docs = await db.messages.find({"chat_id": body.chat_id}, {"_id": 0}).sort("created_at", 1).to_list(1000)
     history = [{"role": d["role"], "content": d["content"]} for d in history_docs]
@@ -1237,8 +1320,10 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
             gemini_error or "No available model response. Ensure Gemini is configured or enable local/fine-tuned model.",
         )
 
+    _log_answer_source(source, body.chat_id, current_user.id, reply_text)
     ai_msg = Message(chat_id=body.chat_id, role="assistant", content=reply_text, source=source)
     await db.messages.insert_one(ai_msg.model_dump())
+    _log_message_event(body.chat_id, current_user.id, "assistant", "static" if source == "short_circuit" else "model", reply_text)
 
     new_title = chat.get("title", "محادثة جديدة")
     if new_title == "محادثة جديدة":
@@ -1259,6 +1344,7 @@ async def send_message_stream(body: SendMessageBody, current_user: UserOut = Dep
 
     user_msg = Message(chat_id=body.chat_id, role="user", content=body.content.strip())
     await db.messages.insert_one(user_msg.model_dump())
+    _log_message_event(body.chat_id, current_user.id, "user", "client", body.content.strip())
 
     history_docs = await db.messages.find({"chat_id": body.chat_id}, {"_id": 0}).sort("created_at", 1).to_list(1000)
     history = [{"role": d["role"], "content": d["content"]} for d in history_docs]
@@ -1273,8 +1359,10 @@ async def send_message_stream(body: SendMessageBody, current_user: UserOut = Dep
         async def event_gen():
             source = "short_circuit"
             logger.info("Streaming reply selected from static response (short_circuit) chat_id=%s user=%s", body.chat_id, current_user.id)
+            _log_answer_source(source, body.chat_id, current_user.id, short_reply)
             ai_msg = Message(chat_id=body.chat_id, role="assistant", content=short_reply, source=source)
             await db.messages.insert_one(ai_msg.model_dump())
+            _log_message_event(body.chat_id, current_user.id, "assistant", "static", short_reply)
 
             new_title = chat.get("title", "محادثة جديدة")
             if new_title == "محادثة جديدة":
@@ -1315,8 +1403,10 @@ async def send_message_stream(body: SendMessageBody, current_user: UserOut = Dep
                 yield f"event: token\ndata: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
 
             reply_text = "".join(full_chunks)
+            _log_answer_source(source, body.chat_id, current_user.id, reply_text)
             ai_msg = Message(chat_id=body.chat_id, role="assistant", content=reply_text, source=source)
             await db.messages.insert_one(ai_msg.model_dump())
+            _log_message_event(body.chat_id, current_user.id, "assistant", "model", reply_text)
 
             new_title = chat.get("title", "محادثة جديدة")
             if new_title == "محادثة جديدة":

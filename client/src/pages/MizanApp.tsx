@@ -69,6 +69,10 @@ export default function MizanApp() {
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
   const skipNextLoadRef = useRef(false);
+  const activeLoadIdRef = useRef(0);
+  const activeChatIdRef = useRef<string | null>(null);
+  const streamControllerRef = useRef<AbortController | null>(null);
+  const messagesCacheRef = useRef<Record<string, Message[]>>({});
 
   // ── Data fetchers ──
   const refreshChats = async (): Promise<Chat[]> => {
@@ -86,8 +90,30 @@ export default function MizanApp() {
     void refreshChats();
   }, []);
 
+  const resetChatUi = () => {
+    setSending(false);
+    setStreamingText("");
+    setLoadingMsgs(false);
+  };
+
+  const handleChatSelect = (id: string) => {
+    if (activeChatIdRef.current !== id) {
+      streamControllerRef.current?.abort();
+      streamControllerRef.current = null;
+      resetChatUi();
+    }
+    activeChatIdRef.current = id;
+    setActiveId(id);
+    if (window.innerWidth < 768) {
+      setSidebarOpen(false);
+    }
+  };
+
   useEffect(() => {
+    activeChatIdRef.current = activeId;
     if (!activeId) {
+      resetChatUi();
+      activeLoadIdRef.current += 1;
       setMessages([]);
       return;
     }
@@ -95,15 +121,28 @@ export default function MizanApp() {
       skipNextLoadRef.current = false;
       return;
     }
+
+    const loadId = activeLoadIdRef.current + 1;
+    activeLoadIdRef.current = loadId;
+    setMessages(messagesCacheRef.current[activeId] ?? []);
+    resetChatUi();
+
     void (async () => {
       setLoadingMsgs(true);
       try {
         const data = await listMessages(activeId);
-        setMessages(data);
+        if (loadId === activeLoadIdRef.current) {
+          messagesCacheRef.current[activeId] = data;
+          setMessages(data);
+        }
       } catch {
-        toast.error("تعذّر تحميل الرسائل");
+        if (loadId === activeLoadIdRef.current) {
+          toast.error("تعذّر تحميل الرسائل");
+        }
       } finally {
-        setLoadingMsgs(false);
+        if (loadId === activeLoadIdRef.current) {
+          setLoadingMsgs(false);
+        }
       }
     })();
   }, [activeId]);
@@ -131,8 +170,13 @@ export default function MizanApp() {
     try {
       const c = await createChat();
       setChats((prev) => [c, ...prev]);
+      streamControllerRef.current?.abort();
+      streamControllerRef.current = null;
+      activeChatIdRef.current = c.id;
       setActiveId(c.id);
+      messagesCacheRef.current[c.id] = [];
       setMessages([]);
+      resetChatUi();
       if (window.innerWidth < 768) {
         setSidebarOpen(false);
       }
@@ -146,9 +190,14 @@ export default function MizanApp() {
       await deleteChat(id);
       setChats((prev) => prev.filter((c) => c.id !== id));
       if (activeId === id) {
+        streamControllerRef.current?.abort();
+        streamControllerRef.current = null;
+        activeChatIdRef.current = null;
         setActiveId(null);
         setMessages([]);
+        resetChatUi();
       }
+      delete messagesCacheRef.current[id];
       toast.success("تم حذف المحادثة");
     } catch {
       toast.error("تعذّر الحذف");
@@ -182,7 +231,11 @@ export default function MizanApp() {
         const c = await createChat();
         setChats((prev) => [c, ...prev]);
         skipNextLoadRef.current = true;
+        streamControllerRef.current?.abort();
+        streamControllerRef.current = null;
+        activeChatIdRef.current = c.id;
         setActiveId(c.id);
+        resetChatUi();
         chatId = c.id;
       } catch {
         toast.error("تعذّر بدء محادثة");
@@ -204,17 +257,26 @@ export default function MizanApp() {
 
     await new Promise<void>((resolve) => {
       let acc = "";
-      sendMessageStream(
+      streamControllerRef.current?.abort();
+      const controller = sendMessageStream(
         chatId!,
         content,
         {
           onToken: (chunk) => {
+            if (activeChatIdRef.current !== chatId) return;
             acc += chunk;
             setStreamingText(acc);
           },
           onDone: async () => {
+            if (activeChatIdRef.current !== chatId) {
+              streamControllerRef.current = null;
+              setSending(false);
+              resolve();
+              return;
+            }
             try {
               const data = await listMessages(chatId!);
+              messagesCacheRef.current[chatId!] = data;
               setMessages(data);
               void refreshChats();
             } catch {
@@ -222,20 +284,41 @@ export default function MizanApp() {
             }
             setStreamingText("");
             setSending(false);
+            streamControllerRef.current = null;
             resolve();
           },
           onError: (msg) => {
+            if (activeChatIdRef.current !== chatId) {
+              streamControllerRef.current = null;
+              setSending(false);
+              resolve();
+              return;
+            }
             toast.error(`خطأ من المساعد: ${msg}`);
             setStreamingText("");
             setSending(false);
+            streamControllerRef.current = null;
             resolve();
           },
         }
       );
+      streamControllerRef.current = controller;
+      controller.signal.addEventListener(
+        "abort",
+        () => {
+          if (activeChatIdRef.current === chatId) {
+            setSending(false);
+            setStreamingText("");
+          }
+          streamControllerRef.current = null;
+          resolve();
+        },
+        { once: true }
+      );
     });
   };
 
-  const showEmpty = !activeId && messages.length === 0;
+  const showEmpty = messages.length === 0 && !loadingMsgs && !sending;
 
   const handleLogout = () => {
     logout();
@@ -272,12 +355,7 @@ export default function MizanApp() {
         <Sidebar
           chats={chats}
           activeId={activeId}
-          onSelect={(id) => {
-            setActiveId(id);
-            if (window.innerWidth < 768) {
-              setSidebarOpen(false);
-            }
-          }}
+          onSelect={handleChatSelect}
           onNew={handleNewChat}
           onDelete={handleDelete}
           onRename={handleRename}
