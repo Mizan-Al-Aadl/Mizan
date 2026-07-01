@@ -104,6 +104,15 @@ export const apiLogin = (
     }
   );
 
+export const apiGuestLogin = (): Promise<{ token: string }> =>
+  apiFetch(
+    "/auth/guest",
+    z.object({ token: z.string() }),
+    {
+      method: "POST",
+    }
+  );
+
 export const apiGetMe = (): Promise<User> =>
   apiFetch("/auth/me", UserSchema);
 

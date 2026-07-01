@@ -1,5 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { loginSchema, type LoginFormData } from "@/schemas/auth";
 import AuthSubmitButton from "./AuthSubmitButton";
@@ -7,10 +8,12 @@ import FormField from "./FormField";
 
 interface LoginFormProps {
   onSubmit: (data: LoginFormData) => Promise<void>;
+  onGuestSubmit?: () => Promise<void>;
+  guestIsSubmitting?: boolean;
   error?: string | null;
 }
 
-export default function LoginForm({ onSubmit, error }: LoginFormProps) {
+export default function LoginForm({ onSubmit, onGuestSubmit, guestIsSubmitting = false, error }: LoginFormProps) {
   const {
     register,
     handleSubmit,
@@ -43,6 +46,18 @@ export default function LoginForm({ onSubmit, error }: LoginFormProps) {
         label="Log in"
         submittingLabel="Logging in..."
       />
+
+      {onGuestSubmit ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full"
+          onClick={() => void onGuestSubmit()}
+          disabled={isSubmitting || guestIsSubmitting}
+        >
+          {guestIsSubmitting ? "Continuing as guest..." : "Continue as guest"}
+        </Button>
+      ) : null}
     </form>
   );
 }

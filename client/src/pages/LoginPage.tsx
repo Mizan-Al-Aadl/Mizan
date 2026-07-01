@@ -5,8 +5,9 @@ import { useAuth } from "@/hooks/useAuth";
 import type { LoginFormData } from "@/schemas/auth";
 
 export default function LoginPage() {
-  const { login, isAuthenticated, isLoading } = useAuth();
+  const { login, continueAsGuest, isAuthenticated, isLoading } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const [isGuestSubmitting, setIsGuestSubmitting] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -36,6 +37,19 @@ export default function LoginPage() {
     }
   };
 
+  const handleGuestSubmit = async () => {
+    setError(null);
+    setIsGuestSubmitting(true);
+    try {
+      await continueAsGuest();
+      navigate("/app", { replace: true });
+    } catch (err) {
+      setError(getLoginErrorMessage(err));
+    } finally {
+      setIsGuestSubmitting(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div dir="ltr" className="flex min-h-screen items-center justify-center bg-base-100 p-4 font-sans">
@@ -53,7 +67,12 @@ export default function LoginPage() {
           <h1 className="text-2xl font-semibold text-base-content">Log in to Mizan</h1>
           <p className="text-sm text-base-content/70">Enter your email and password to continue.</p>
         </div>
-        <LoginForm onSubmit={handleSubmit} error={error} />
+        <LoginForm
+          onSubmit={handleSubmit}
+          onGuestSubmit={handleGuestSubmit}
+          guestIsSubmitting={isGuestSubmitting}
+          error={error}
+        />
         <p className="mt-6 text-center text-sm text-base-content/70">
           Don't have an account?{' '}
           <Link to="/register" className="font-medium text-primary underline">

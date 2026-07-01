@@ -305,6 +305,22 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     return UserOut(**user_doc)
 
 
+async def _get_or_create_guest_user() -> UserOut:
+    guest_email = "guest@mizan.local"
+    existing = await db.users.find_one({"email": guest_email}, {"_id": 0})
+    if existing:
+        return UserOut(**existing)
+
+    guest_password = f"guest-{uuid.uuid4().hex}"
+    guest_user = User(
+        name="Guest",
+        email=guest_email,
+        hashed_password=hash_password(guest_password),
+    )
+    await db.users.insert_one(guest_user.model_dump())
+    return UserOut(**guest_user.model_dump())
+
+
 class ChatCreate(BaseModel):
     title: Optional[str] = None
 
@@ -1165,6 +1181,13 @@ async def login(body: UserLogin):
         raise HTTPException(401, "Invalid email or password")
 
     token = create_access_token(user_doc["id"])
+    return TokenResponse(token=token)
+
+
+@api.post("/auth/guest", response_model=TokenResponse)
+async def guest_login():
+    guest_user = await _get_or_create_guest_user()
+    token = create_access_token(guest_user.id)
     return TokenResponse(token=token)
 
 
