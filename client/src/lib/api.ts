@@ -81,13 +81,38 @@ export const apiRegister = (
   name: string,
   email: string,
   password: string
-): Promise<{ token: string }> =>
+): Promise<{ email: string; message: string }> =>
   apiFetch(
     "/auth/register",
-    z.object({ token: z.string() }),
+    z.object({ email: z.string(), message: z.string() }),
     {
       method: "POST",
       body: JSON.stringify({ name, email, password }),
+    }
+  );
+
+export const apiVerifyEmail = (
+  email: string,
+  code: string
+): Promise<{ token: string }> =>
+  apiFetch(
+    "/auth/verify-email",
+    z.object({ token: z.string() }),
+    {
+      method: "POST",
+      body: JSON.stringify({ email, code }),
+    }
+  );
+
+export const apiResendCode = (
+  email: string
+): Promise<{ ok: boolean; message?: string | null }> =>
+  apiFetch(
+    "/auth/resend-code",
+    z.object({ ok: z.boolean(), message: z.string().nullable().optional() }),
+    {
+      method: "POST",
+      body: JSON.stringify({ email }),
     }
   );
 
@@ -138,6 +163,65 @@ export const updateChat = (id: string, title: string): Promise<Chat> =>
 
 export const listMessages = (chatId: string): Promise<Message[]> =>
   apiFetch(`/chats/${chatId}/messages`, z.array(MessageSchema));
+
+// ─── Document analysis ────────────────────────────────────────────────────────
+
+export async function analyzeDocument(
+  chatId: string,
+  file: File,
+  question: string
+): Promise<Message> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS);
+
+  const form = new FormData();
+  form.append("chat_id", chatId);
+  form.append("question", question);
+  form.append("file", file);
+
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  try {
+    const res = await fetch(`${BASE}/documents/analyze`, {
+      method: "POST",
+      headers,
+      body: form,
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      const message = buildApiErrorMessage(res.status, body);
+      throw new Error(`API ${res.status}: ${message}`);
+    }
+    const json = await res.json();
+    return MessageSchema.parse(json);
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+export async function openDocument(messageId: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const res = await fetch(`${BASE}/documents/${messageId}`, { headers });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(buildApiErrorMessage(res.status, body));
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank", "noopener,noreferrer");
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
 
 // ─── Streaming chat ───────────────────────────────────────────────────────────
 

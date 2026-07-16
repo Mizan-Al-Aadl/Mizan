@@ -1,5 +1,5 @@
 import { createContext, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { apiGetMe, apiGuestLogin, apiLogin, apiRegister } from "@/lib/api";
+import { apiGetMe, apiGuestLogin, apiLogin, apiRegister, apiVerifyEmail } from "@/lib/api";
 import { clearToken, getToken, setToken } from "@/lib/auth";
 import type { User } from "@/types";
 
@@ -9,7 +9,10 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (name: string, email: string, password: string) => Promise<void>;
+  /** Registers the account and returns the email awaiting verification (no session yet). */
+  register: (name: string, email: string, password: string) => Promise<string>;
+  /** Confirms the emailed code; on success the user is logged in. */
+  verifyEmail: (email: string, code: string) => Promise<void>;
   continueAsGuest: () => Promise<void>;
   logout: () => void;
 }
@@ -66,6 +69,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = useCallback(
     async (name: string, email: string, password: string) => {
       const response = await apiRegister(name, email, password);
+      return response.email;
+    },
+    []
+  );
+
+  const verifyEmail = useCallback(
+    async (email: string, code: string) => {
+      const response = await apiVerifyEmail(email, code);
       setToken(response.token);
       setTokenState(response.token);
       await loadUser(response.token);
@@ -88,10 +99,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       register,
+      verifyEmail,
       continueAsGuest,
       logout,
     }),
-    [user, token, isLoading, login, register, continueAsGuest, logout]
+    [user, token, isLoading, login, register, verifyEmail, continueAsGuest, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

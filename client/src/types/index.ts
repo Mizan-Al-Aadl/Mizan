@@ -9,15 +9,22 @@ export const ChatSchema = z.object({
   updated_at: z.string(),
 });
 
+export const AttachmentSchema = z.object({
+  filename: z.string(),
+  mime_type: z.string(),
+  size: z.number(),
+});
+
 export const MessageSchema = z.object({
   id: z.string(),
   chat_id: z.string(),
   role: z.enum(["user", "assistant"]),
   content: z.string(),
   source: z
-    .enum(["local", "local_url", "finetuned", "claude", "gemini_rag", "short_circuit"])
+    .enum(["local", "local_url", "finetuned", "claude", "gemini_rag", "gemini_document", "short_circuit"])
     .nullable()
     .optional(),
+  attachment: AttachmentSchema.nullable().optional(),
   created_at: z.string(),
 });
 
@@ -30,6 +37,7 @@ export const UserSchema = z.object({
   id: z.string(),
   name: z.string(),
   email: z.string().email(),
+  email_verified: z.boolean().optional(),
   created_at: z.string(),
 });
 
@@ -44,6 +52,7 @@ export const SendMessageSchema = z.object({
 // ─── Inferred types ───────────────────────────────────────────────────────────
 
 export type Chat = z.infer<typeof ChatSchema>;
+export type Attachment = z.infer<typeof AttachmentSchema>;
 export type Message = z.infer<typeof MessageSchema>;
 export type Health = z.infer<typeof HealthSchema>;
 export type SendMessageInput = z.infer<typeof SendMessageSchema>;

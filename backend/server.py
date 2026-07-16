@@ -17,11 +17,16 @@ try:
 except ImportError:
     Translator = None
 
+import base64
+import secrets
+import smtplib
+from email.mime.text import MIMEText
+
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -41,6 +46,16 @@ JWT_SECRET = "change-me"
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 
+SMTP_HOST = ""
+SMTP_PORT = 587
+SMTP_USERNAME = ""
+SMTP_PASSWORD = ""
+SMTP_FROM_EMAIL = ""
+SMTP_USE_TLS = True
+VERIFICATION_CODE_TTL_MINUTES = 10
+VERIFICATION_RESEND_COOLDOWN_SECONDS = 60
+VERIFICATION_MAX_ATTEMPTS = 5
+
 USE_FINETUNED = False
 FINETUNED_MODEL_PATH = "C:/tmp/mizan-chatbot/mizan-q4_k_m.gguf"
 FINETUNED_HF_REPO = "olaasm/mizan"
@@ -50,7 +65,7 @@ FINETUNED_N_THREADS = 4
 
 CHATBOT_LOCAL_URL = ""
 GEMINI_API_KEY = ""
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_MODEL_CANDIDATES = []
 LAW_DATASET_PATH = "../law_dataset.csv"
 RAG_TOP_K = 5
@@ -88,6 +103,8 @@ def _refresh_settings_from_env() -> None:
     global AZURE_MAX_TOKENS, AZURE_FREQUENCY_PENALTY, AZURE_PRESENCE_PENALTY, AZURE_INCLUDE_SYSTEM_PROMPT
     global AZURE_HISTORY_MAX_MESSAGES, AZURE_CONTEXT_WINDOW, AZURE_AUTO_CONTINUE_ROUNDS, MODEL_HTTP_TIMEOUT_SECONDS
     global STREAM_KEEPALIVE_SECONDS, AZURE_REQUEST_MAX_RETRIES, AZURE_RETRY_BACKOFF_BASE
+    global SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM_EMAIL, SMTP_USE_TLS
+    global VERIFICATION_CODE_TTL_MINUTES, VERIFICATION_RESEND_COOLDOWN_SECONDS, VERIFICATION_MAX_ATTEMPTS
 
     load_dotenv(ROOT_DIR / ".env", override=True)
 
@@ -97,6 +114,16 @@ def _refresh_settings_from_env() -> None:
     JWT_SECRET = os.getenv("JWT_SECRET", JWT_SECRET).strip()
     JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", JWT_ALGORITHM).strip()
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", str(JWT_ACCESS_TOKEN_EXPIRE_MINUTES)))
+
+    SMTP_HOST = os.getenv("SMTP_HOST", SMTP_HOST).strip()
+    SMTP_PORT = int(os.getenv("SMTP_PORT", str(SMTP_PORT)))
+    SMTP_USERNAME = os.getenv("SMTP_USERNAME", SMTP_USERNAME).strip()
+    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", SMTP_PASSWORD).strip().strip('"').strip("'")
+    SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", SMTP_FROM_EMAIL).strip()
+    SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+    VERIFICATION_CODE_TTL_MINUTES = int(os.getenv("VERIFICATION_CODE_TTL_MINUTES", str(VERIFICATION_CODE_TTL_MINUTES)))
+    VERIFICATION_RESEND_COOLDOWN_SECONDS = int(os.getenv("VERIFICATION_RESEND_COOLDOWN_SECONDS", str(VERIFICATION_RESEND_COOLDOWN_SECONDS)))
+    VERIFICATION_MAX_ATTEMPTS = int(os.getenv("VERIFICATION_MAX_ATTEMPTS", str(VERIFICATION_MAX_ATTEMPTS)))
 
     USE_FINETUNED = os.getenv("USE_FINETUNED", "false").lower() == "true"
     FINETUNED_MODEL_PATH = os.getenv("FINETUNED_MODEL_PATH", FINETUNED_MODEL_PATH).strip()
@@ -117,9 +144,8 @@ def _refresh_settings_from_env() -> None:
                 [
                     GEMINI_MODEL,
                     "gemini-2.5-flash",
-                    "gemini-1.5-flash-002",
-                    "gemini-1.5-pro",
-                    "gemini-1.5-pro-002",
+                    "gemini-2.5-flash-lite",
+                    "gemini-2.5-pro",
                 ]
             ),
         ).split(",")
@@ -224,6 +250,13 @@ class Chat(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+class Attachment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    filename: str
+    mime_type: str
+    size: int
+
+
 class Message(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -231,6 +264,7 @@ class Message(BaseModel):
     role: str
     content: str
     source: Optional[str] = None
+    attachment: Optional[Attachment] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -257,6 +291,11 @@ class User(BaseModel):
     name: str
     email: str
     hashed_password: str
+    email_verified: bool = False
+    verification_code_hash: Optional[str] = None
+    verification_code_expires_at: Optional[str] = None
+    verification_sent_at: Optional[str] = None
+    verification_attempts: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -265,12 +304,36 @@ class UserOut(BaseModel):
     id: str
     name: str
     email: str
+    email_verified: bool = True
     created_at: str
 
 
 class TokenResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     token: str
+
+
+class VerificationPendingResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    email: str
+    message: str
+
+
+class OkResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    ok: bool
+    message: Optional[str] = None
+
+
+class VerifyEmailBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    email: str
+    code: str
+
+
+class ResendCodeBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    email: str
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -287,6 +350,80 @@ def create_access_token(subject_id: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {"sub": subject_id, "exp": expire}
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _generate_verification_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def _send_verification_email_sync(to_email: str, code: str) -> None:
+    message = MIMEText(
+        f"رمز التحقق الخاص بك في ميزان هو: {code}\n"
+        f"الرمز صالح لمدة {VERIFICATION_CODE_TTL_MINUTES} دقائق.\n\n"
+        "إذا لم تطلب هذا الرمز، يمكنك تجاهل هذه الرسالة.",
+        "plain",
+        "utf-8",
+    )
+    message["Subject"] = "رمز التحقق - ميزان"
+    message["From"] = SMTP_FROM_EMAIL or SMTP_USERNAME
+    message["To"] = to_email
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+        if SMTP_USE_TLS:
+            smtp.starttls()
+        if SMTP_USERNAME:
+            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+        smtp.sendmail(message["From"], [to_email], message.as_string())
+
+
+async def _send_verification_email(to_email: str, code: str) -> None:
+    if not SMTP_HOST:
+        logger.warning(
+            "SMTP not configured; verification code for %s is %s (not emailed, dev fallback)",
+            to_email,
+            code,
+        )
+        return
+    try:
+        await asyncio.to_thread(_send_verification_email_sync, to_email, code)
+    except Exception as e:
+        logger.exception("Failed to send verification email to %s: %s", to_email, e)
+        raise RuntimeError(f"Failed to send verification email: {e}")
+
+
+async def _issue_verification_code(user_doc: dict, force: bool = False) -> bool:
+    """Generate and email a fresh verification code for a user.
+
+    Returns False (no-op) if a code was already sent within the resend
+    cooldown window and force is not set, so repeated login/resend attempts
+    don't spam the inbox or the SMTP provider.
+    """
+    now = datetime.now(timezone.utc)
+    if not force:
+        sent_at_str = user_doc.get("verification_sent_at")
+        if sent_at_str:
+            try:
+                sent_at = datetime.fromisoformat(sent_at_str)
+                if (now - sent_at).total_seconds() < VERIFICATION_RESEND_COOLDOWN_SECONDS:
+                    return False
+            except ValueError:
+                pass
+
+    code = _generate_verification_code()
+    expires_at = now + timedelta(minutes=VERIFICATION_CODE_TTL_MINUTES)
+    await db.users.update_one(
+        {"id": user_doc["id"]},
+        {
+            "$set": {
+                "verification_code_hash": hash_password(code),
+                "verification_code_expires_at": expires_at.isoformat(),
+                "verification_sent_at": now.isoformat(),
+                "verification_attempts": 0,
+            }
+        },
+    )
+    await _send_verification_email(user_doc["email"], code)
+    return True
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UserOut:
@@ -316,6 +453,7 @@ async def _get_or_create_guest_user() -> UserOut:
         name="Guest",
         email=guest_email,
         hashed_password=hash_password(guest_password),
+        email_verified=True,
     )
     await db.users.insert_one(guest_user.model_dump())
     return UserOut(**guest_user.model_dump())
@@ -686,6 +824,218 @@ async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
         raise RuntimeError(f"Gemini request timed out after {MODEL_HTTP_TIMEOUT_SECONDS} seconds")
     except Exception as e:
         raise RuntimeError(f"Gemini API unreachable: {e}")
+
+
+DOCUMENT_MAX_BYTES = 15 * 1024 * 1024  # keep comfortably under Gemini's inline request size limit
+DOCUMENT_ALLOWED_MIME_TYPES = {
+    "application/pdf",
+    "text/plain",
+    "image/png",
+    "image/jpeg",
+}
+UPLOADS_DIR = ROOT_DIR / "uploads"
+
+PDF_FONT_CANDIDATES = [
+    os.getenv("PDF_FONT_PATH", "").strip(),
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/tahoma.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+]
+PDF_BOLD_FONT_CANDIDATES = [
+    os.getenv("PDF_BOLD_FONT_PATH", "").strip(),
+    "C:/Windows/Fonts/arialbd.ttf",
+    "C:/Windows/Fonts/tahomabd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
+
+_PDF_REQUEST_KEYWORDS = ("pdf", "بي دي اف", "بي دي إف")
+
+
+def _wants_pdf(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(keyword in lowered for keyword in _PDF_REQUEST_KEYWORDS)
+
+
+def _resolve_pdf_font(candidates: List[str]) -> Optional[str]:
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _generate_answer_pdf_sync(text: str) -> bytes:
+    from fpdf import FPDF  # imported lazily so the server runs even without fpdf2 installed
+
+    font_path = _resolve_pdf_font(PDF_FONT_CANDIDATES)
+    if not font_path:
+        raise RuntimeError("No Arabic-capable TTF font found for PDF generation (set PDF_FONT_PATH)")
+    bold_path = _resolve_pdf_font(PDF_BOLD_FONT_CANDIDATES) or font_path
+
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.add_font("body", style="", fname=font_path)
+    pdf.add_font("body", style="B", fname=bold_path)
+    pdf.set_text_shaping(True)
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+
+    pdf.set_font("body", style="B", size=18)
+    pdf.set_text_color(20, 83, 45)
+    pdf.cell(0, 12, "ميزان", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("body", size=9)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(
+        0,
+        6,
+        "مساعد قانوني - المعلومات للاطلاع العام ولا تعتبر استشارة قانونية رسمية",
+        align="C",
+        new_x="LMARGIN",
+        new_y="NEXT",
+    )
+    pdf.ln(4)
+    pdf.set_draw_color(200, 200, 200)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(6)
+
+    pdf.set_text_color(30, 30, 30)
+    pdf.set_font("body", size=12)
+    for paragraph in (text or "").split("\n"):
+        if not paragraph.strip():
+            pdf.ln(4)
+            continue
+        pdf.multi_cell(0, 8, paragraph, align="R", new_x="LMARGIN", new_y="NEXT")
+
+    return bytes(pdf.output())
+
+
+async def _generate_answer_pdf(text: str) -> bytes:
+    return await asyncio.to_thread(_generate_answer_pdf_sync, text)
+
+
+PDF_SYSTEM_NOTE = (
+    "\n\n(ملاحظة للنظام: المستخدم طلب الإجابة كملف PDF. "
+    "اكتب محتوى الإجابة كاملاً ومنسقاً كمستند، ولا تعتذر عن عدم قدرتك على إنشاء ملفات — "
+    "سيقوم النظام بتحويل إجابتك تلقائياً إلى ملف PDF وإرفاقه.)"
+)
+
+
+def _append_pdf_note_to_history(history: List[dict]) -> List[dict]:
+    """Return a copy of history with a system note on the last user message so the
+    model writes document content instead of refusing to produce a file."""
+    if not history:
+        return history
+    adjusted = [dict(message) for message in history]
+    for message in reversed(adjusted):
+        if message.get("role") == "user":
+            message["content"] = str(message.get("content", "")) + PDF_SYSTEM_NOTE
+            break
+    return adjusted
+
+
+async def _attach_answer_pdf(ai_msg: Message, chat_title: str) -> None:
+    """Render the assistant reply to a PDF and attach it to the message (best effort)."""
+    try:
+        pdf_bytes = await _generate_answer_pdf(ai_msg.content)
+    except Exception as e:
+        logger.warning("PDF generation failed, sending text-only answer: %s", e)
+        return
+
+    filename = "mizan-answer.pdf"
+    title = (chat_title or "").strip()
+    if title and title != "محادثة جديدة":
+        safe_title = re.sub(r"[^\w؀-ۿ-]+", "-", title).strip("-")[:40]
+        if safe_title:
+            filename = f"{safe_title}.pdf"
+
+    _save_uploaded_document(ai_msg.chat_id, ai_msg.id, filename, pdf_bytes)
+    ai_msg.attachment = Attachment(filename=filename, mime_type="application/pdf", size=len(pdf_bytes))
+
+
+def _save_uploaded_document(chat_id: str, message_id: str, original_filename: str, file_bytes: bytes) -> Path:
+    chat_dir = UPLOADS_DIR / chat_id
+    chat_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = os.path.basename(original_filename or "document")
+    dest = chat_dir / f"{message_id}_{safe_name}"
+    dest.write_bytes(file_bytes)
+    return dest
+
+
+def _resolve_uploaded_document(chat_id: str, message_id: str) -> Optional[Path]:
+    chat_dir = UPLOADS_DIR / chat_id
+    if not chat_dir.is_dir():
+        return None
+    for candidate in chat_dir.glob(f"{message_id}_*"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+async def _call_gemini_document(question: str, file_bytes: bytes, mime_type: str) -> Optional[str]:
+    if not GEMINI_API_KEY:
+        return None
+
+    encoded = base64.standard_b64encode(file_bytes).decode("utf-8")
+    payload = {
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"inline_data": {"mime_type": mime_type, "data": encoded}},
+                    {"text": question.strip() or "Summarize this document and cite the key legal points."},
+                ],
+            }
+        ],
+        "generationConfig": {
+            "temperature": GEMINI_TEMPERATURE,
+            "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=MODEL_HTTP_TIMEOUT_SECONDS) as cx:
+            last_error_message = ""
+            for model_name in GEMINI_MODEL_CANDIDATES:
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model_name}:generateContent?key={GEMINI_API_KEY}"
+                )
+                try:
+                    response = await cx.post(url, json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                except httpx.HTTPStatusError as e:
+                    status = getattr(e.response, "status_code", None)
+                    detail = ""
+                    try:
+                        detail = e.response.text[:500]
+                    except Exception:
+                        detail = ""
+                    if status == 404:
+                        last_error_message = f"{model_name}: {detail or 'model not available'}"
+                        logger.warning("Gemini model %s unavailable for document analysis, trying next candidate", model_name)
+                        continue
+                    raise RuntimeError(f"Gemini HTTP {status}: {detail}")
+
+                if isinstance(data, dict):
+                    error = data.get("error")
+                    if error:
+                        last_error_message = f"{model_name}: {error}"
+                        continue
+                    reply = _extract_reply_from_gemini(data)
+                    if reply:
+                        return reply
+                    block_reason = (data.get("promptFeedback") or {}).get("blockReason")
+                    if block_reason:
+                        last_error_message = f"{model_name}: blocked ({block_reason})"
+                        continue
+                    last_error_message = f"{model_name}: Gemini response missing expected content"
+
+        raise RuntimeError(
+            "Gemini document analysis failed. Tried models: "
+            f"{', '.join(GEMINI_MODEL_CANDIDATES)}. Last error: {last_error_message}"
+        )
+    except httpx.TimeoutException:
+        raise RuntimeError(f"Gemini request timed out after {MODEL_HTTP_TIMEOUT_SECONDS} seconds")
 
 
 async def _stream_gemini_rag(history: List[dict]) -> AsyncGenerator[str, None]:
@@ -1150,7 +1500,7 @@ async def health():
     }
 
 
-@api.post("/auth/register", response_model=TokenResponse)
+@api.post("/auth/register", response_model=VerificationPendingResponse)
 async def register(body: UserCreate):
     email = body.email.strip().lower()
     if not body.name.strip():
@@ -1167,10 +1517,11 @@ async def register(body: UserCreate):
         name=body.name.strip(),
         email=email,
         hashed_password=hashed_password,
+        email_verified=False,
     )
     await db.users.insert_one(user.model_dump())
-    token = create_access_token(user.id)
-    return TokenResponse(token=token)
+    await _issue_verification_code(user.model_dump(), force=True)
+    return VerificationPendingResponse(email=email, message="Verification code sent to your email")
 
 
 @api.post("/auth/login", response_model=TokenResponse)
@@ -1180,8 +1531,70 @@ async def login(body: UserLogin):
     if not user_doc or not verify_password(body.password, user_doc["hashed_password"]):
         raise HTTPException(401, "Invalid email or password")
 
+    if not user_doc.get("email_verified", True):
+        await _issue_verification_code(user_doc)
+        raise HTTPException(403, "EMAIL_NOT_VERIFIED")
+
     token = create_access_token(user_doc["id"])
     return TokenResponse(token=token)
+
+
+@api.post("/auth/verify-email", response_model=TokenResponse)
+async def verify_email(body: VerifyEmailBody):
+    email = body.email.strip().lower()
+    code = body.code.strip()
+    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user_doc:
+        raise HTTPException(404, "User not found")
+
+    if user_doc.get("email_verified", False):
+        token = create_access_token(user_doc["id"])
+        return TokenResponse(token=token)
+
+    code_hash = user_doc.get("verification_code_hash")
+    expires_at_str = user_doc.get("verification_code_expires_at")
+    if not code_hash or not expires_at_str:
+        raise HTTPException(400, "No verification code found. Please request a new one.")
+
+    if datetime.now(timezone.utc) > datetime.fromisoformat(expires_at_str):
+        raise HTTPException(400, "Verification code has expired. Please request a new one.")
+
+    if user_doc.get("verification_attempts", 0) >= VERIFICATION_MAX_ATTEMPTS:
+        raise HTTPException(429, "Too many incorrect attempts. Please request a new code.")
+
+    if not verify_password(code, code_hash):
+        await db.users.update_one({"id": user_doc["id"]}, {"$inc": {"verification_attempts": 1}})
+        raise HTTPException(400, "Invalid verification code")
+
+    await db.users.update_one(
+        {"id": user_doc["id"]},
+        {
+            "$set": {"email_verified": True},
+            "$unset": {
+                "verification_code_hash": "",
+                "verification_code_expires_at": "",
+                "verification_sent_at": "",
+                "verification_attempts": "",
+            },
+        },
+    )
+    token = create_access_token(user_doc["id"])
+    return TokenResponse(token=token)
+
+
+@api.post("/auth/resend-code", response_model=OkResponse)
+async def resend_code(body: ResendCodeBody):
+    email = body.email.strip().lower()
+    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user_doc:
+        raise HTTPException(404, "User not found")
+    if user_doc.get("email_verified", False):
+        raise HTTPException(400, "Email already verified")
+
+    sent = await _issue_verification_code(user_doc)
+    if not sent:
+        raise HTTPException(429, "Please wait before requesting another code")
+    return OkResponse(ok=True, message="Verification code sent")
 
 
 @api.post("/auth/guest", response_model=TokenResponse)
@@ -1304,6 +1717,9 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
     history_docs = await db.messages.find({"chat_id": body.chat_id}, {"_id": 0}).sort("created_at", 1).to_list(1000)
     history = [{"role": d["role"], "content": d["content"]} for d in history_docs]
 
+    pdf_requested = _wants_pdf(body.content)
+    model_history = _append_pdf_note_to_history(history) if pdf_requested else history
+
     reply_text: Optional[str] = None
     source = "unavailable"
     gemini_error: Optional[str] = None
@@ -1314,14 +1730,14 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
         source = "short_circuit"
         logger.info("Reply selected from static response (short_circuit) chat_id=%s user=%s", body.chat_id, current_user.id)
     elif body.use_local:
-        reply_text = await _call_local_chatbot(history)
+        reply_text = await _call_local_chatbot(model_history)
         if reply_text is not None:
             source = "local_url"
             logger.info("Reply selected from local chatbot URL chat_id=%s user=%s", body.chat_id, current_user.id)
 
     if reply_text is None and GEMINI_API_KEY:
         try:
-            reply_text = await _call_gemini_rag(history)
+            reply_text = await _call_gemini_rag(model_history)
             if reply_text is not None:
                 source = "gemini_rag"
                 logger.info("Reply selected from Gemini RAG chat_id=%s user=%s", body.chat_id, current_user.id)
@@ -1345,6 +1761,8 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
 
     _log_answer_source(source, body.chat_id, current_user.id, reply_text)
     ai_msg = Message(chat_id=body.chat_id, role="assistant", content=reply_text, source=source)
+    if pdf_requested and source != "short_circuit":
+        await _attach_answer_pdf(ai_msg, chat.get("title", ""))
     await db.messages.insert_one(ai_msg.model_dump())
     _log_message_event(body.chat_id, current_user.id, "assistant", "static" if source == "short_circuit" else "model", reply_text)
 
@@ -1354,6 +1772,86 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
     await db.chats.update_one({"id": body.chat_id}, {"$set": {"title": new_title, "updated_at": datetime.now(timezone.utc).isoformat()}})
 
     return ai_msg
+
+
+@api.post("/documents/analyze", response_model=Message)
+async def analyze_document(
+    chat_id: str = Form(...),
+    question: str = Form(""),
+    file: UploadFile = File(...),
+    current_user: UserOut = Depends(get_current_user),
+):
+    chat = await db.chats.find_one({"id": chat_id, "user_id": current_user.id}, {"_id": 0})
+    if not chat:
+        raise HTTPException(404, "Chat not found")
+    if not GEMINI_API_KEY:
+        raise HTTPException(503, "Document analysis requires GEMINI_API_KEY to be configured")
+
+    mime_type = file.content_type or "application/octet-stream"
+    if mime_type not in DOCUMENT_ALLOWED_MIME_TYPES:
+        raise HTTPException(400, f"Unsupported file type: {mime_type}. Allowed: {', '.join(sorted(DOCUMENT_ALLOWED_MIME_TYPES))}")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(400, "Uploaded file is empty")
+    if len(file_bytes) > DOCUMENT_MAX_BYTES:
+        raise HTTPException(400, f"File too large ({len(file_bytes)} bytes). Max is {DOCUMENT_MAX_BYTES} bytes")
+
+    user_message_text = question.strip() or f"[Uploaded document: {file.filename}]"
+    original_filename = os.path.basename(file.filename or "document")
+    user_msg = Message(
+        chat_id=chat_id,
+        role="user",
+        content=user_message_text,
+        attachment=Attachment(filename=original_filename, mime_type=mime_type, size=len(file_bytes)),
+    )
+    _save_uploaded_document(chat_id, user_msg.id, original_filename, file_bytes)
+    await db.messages.insert_one(user_msg.model_dump())
+    _log_message_event(chat_id, current_user.id, "user", "document_upload", user_message_text)
+
+    try:
+        reply_text = await _call_gemini_document(question, file_bytes, mime_type)
+    except Exception as e:
+        logger.warning("Document analysis failed: %s", e)
+        raise HTTPException(502, str(e))
+
+    if not reply_text:
+        raise HTTPException(502, "Gemini returned no content for this document")
+
+    source = "gemini_document"
+    _log_answer_source(source, chat_id, current_user.id, reply_text)
+    ai_msg = Message(chat_id=chat_id, role="assistant", content=reply_text, source=source)
+    await db.messages.insert_one(ai_msg.model_dump())
+    _log_message_event(chat_id, current_user.id, "assistant", "model", reply_text)
+
+    new_title = chat.get("title", "محادثة جديدة")
+    if new_title == "محادثة جديدة":
+        new_title = await _generate_title_from_first_message(user_message_text)
+    await db.chats.update_one({"id": chat_id}, {"$set": {"title": new_title, "updated_at": datetime.now(timezone.utc).isoformat()}})
+
+    return ai_msg
+
+
+@api.get("/documents/{message_id}")
+async def get_document(message_id: str, current_user: UserOut = Depends(get_current_user)):
+    message_doc = await db.messages.find_one({"id": message_id}, {"_id": 0})
+    if not message_doc or not message_doc.get("attachment"):
+        raise HTTPException(404, "Document not found")
+
+    chat_doc = await db.chats.find_one({"id": message_doc["chat_id"], "user_id": current_user.id}, {"_id": 0})
+    if not chat_doc:
+        raise HTTPException(404, "Document not found")
+
+    file_path = _resolve_uploaded_document(message_doc["chat_id"], message_id)
+    if not file_path:
+        raise HTTPException(404, "Document file is no longer available")
+
+    attachment = message_doc["attachment"]
+    return FileResponse(
+        path=file_path,
+        media_type=attachment.get("mime_type", "application/octet-stream"),
+        filename=attachment.get("filename", file_path.name),
+    )
 
 
 @api.post("/chat/stream")
@@ -1372,6 +1870,9 @@ async def send_message_stream(body: SendMessageBody, current_user: UserOut = Dep
     history_docs = await db.messages.find({"chat_id": body.chat_id}, {"_id": 0}).sort("created_at", 1).to_list(1000)
     history = [{"role": d["role"], "content": d["content"]} for d in history_docs]
     logger.info("History for chat %s: found %d messages", body.chat_id, len(history_docs))
+
+    pdf_requested = _wants_pdf(body.content)
+    model_history = _append_pdf_note_to_history(history) if pdf_requested else history
 
     use_local_now = body.use_local and bool(CHATBOT_LOCAL_URL)
     use_gemini_now = bool(GEMINI_API_KEY) and not use_local_now
@@ -1407,11 +1908,11 @@ async def send_message_stream(body: SendMessageBody, current_user: UserOut = Dep
         logger.info("Streaming reply selected from %s chat_id=%s user=%s", source, body.chat_id, current_user.id)
         try:
             if use_local_now:
-                gen = _stream_local(history)
+                gen = _stream_local(model_history)
             elif use_gemini_now:
-                gen = _stream_gemini_rag(history)
+                gen = _stream_gemini_rag(model_history)
             elif use_finetuned_now:
-                gen = _stream_finetuned(history)
+                gen = _stream_finetuned(model_history)
             else:
                 raise HTTPException(
                     503,
@@ -1428,6 +1929,8 @@ async def send_message_stream(body: SendMessageBody, current_user: UserOut = Dep
             reply_text = "".join(full_chunks)
             _log_answer_source(source, body.chat_id, current_user.id, reply_text)
             ai_msg = Message(chat_id=body.chat_id, role="assistant", content=reply_text, source=source)
+            if pdf_requested:
+                await _attach_answer_pdf(ai_msg, chat.get("title", ""))
             await db.messages.insert_one(ai_msg.model_dump())
             _log_message_event(body.chat_id, current_user.id, "assistant", "model", reply_text)
 

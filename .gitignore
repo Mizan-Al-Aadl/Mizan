@@ -128,3 +128,6 @@ design_guidelines.json
 .tern-port
 bower_components/
 .lock-wscript
+
+# ── Uploaded chat documents ─────────────────────────────────────────────────────
+backend/uploads/

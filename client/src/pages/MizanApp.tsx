@@ -15,6 +15,7 @@ import {
   updateChat,
   listMessages,
   sendMessageStream,
+  analyzeDocument,
 } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import type { Chat, Message } from "@/types";
@@ -318,6 +319,62 @@ export default function MizanApp() {
     });
   };
 
+  const handleSendFile = async (file: File, question: string) => {
+    if (sending) return;
+
+    let chatId = activeId;
+
+    if (!chatId) {
+      try {
+        const c = await createChat();
+        setChats((prev) => [c, ...prev]);
+        skipNextLoadRef.current = true;
+        streamControllerRef.current?.abort();
+        streamControllerRef.current = null;
+        activeChatIdRef.current = c.id;
+        setActiveId(c.id);
+        resetChatUi();
+        chatId = c.id;
+      } catch {
+        toast.error("تعذّر بدء محادثة");
+        return;
+      }
+    }
+
+    const tempUser: Message = {
+      id: `temp-${Date.now()}`,
+      chat_id: chatId,
+      role: "user",
+      content: question || `[مستند مرفق: ${file.name}]`,
+      attachment: {
+        filename: file.name,
+        mime_type: file.type || "application/octet-stream",
+        size: file.size,
+      },
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, tempUser]);
+    setSending(true);
+
+    try {
+      await analyzeDocument(chatId, file, question);
+      if (activeChatIdRef.current === chatId) {
+        const data = await listMessages(chatId);
+        messagesCacheRef.current[chatId] = data;
+        setMessages(data);
+        void refreshChats();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "خطأ غير معروف";
+      toast.error(`تعذّر تحليل المستند: ${msg}`);
+      setMessages((prev) => prev.filter((m) => m.id !== tempUser.id));
+    } finally {
+      if (activeChatIdRef.current === chatId) {
+        setSending(false);
+      }
+    }
+  };
+
   const showEmpty = messages.length === 0 && !loadingMsgs && !sending;
 
   const handleLogout = () => {
@@ -400,9 +457,11 @@ export default function MizanApp() {
                 {messages.map((m) => (
                   <MessageBubble
                     key={m.id}
+                    messageId={m.id}
                     role={m.role}
                     content={m.content}
                     source={m.source}
+                    attachment={m.attachment}
                   />
                 ))}
                 {sending && streamingText && (
@@ -420,7 +479,7 @@ export default function MizanApp() {
           {/* Input area */}
           <div className="w-full">
             <div className="max-w-4xl mx-auto w-full px-4">
-              <ChatInput onSend={handleSend} disabled={sending} />
+              <ChatInput onSend={handleSend} onSendFile={handleSendFile} disabled={sending} />
             </div>
             <footer
               data-testid="legal-disclaimer"
