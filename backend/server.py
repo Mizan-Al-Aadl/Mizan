@@ -68,6 +68,7 @@ GEMINI_API_KEY = ""
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_MODEL_CANDIDATES = []
 LAW_DATASET_PATH = "../law_dataset.csv"
+LAW_DATASET_URL = ""
 RAG_TOP_K = 5
 RAG_MAX_CONTEXT_CHARS = 6000
 GEMINI_TEMPERATURE = 0.2
@@ -97,7 +98,7 @@ def _refresh_settings_from_env() -> None:
     global MONGO_URL, DB_NAME, MONGO_SERVER_SELECTION_TIMEOUT_MS, JWT_SECRET, JWT_ALGORITHM
     global JWT_ACCESS_TOKEN_EXPIRE_MINUTES, USE_FINETUNED, FINETUNED_MODEL_PATH, FINETUNED_HF_REPO
     global FINETUNED_HF_FILE, FINETUNED_N_CTX, FINETUNED_N_THREADS, CHATBOT_LOCAL_URL, GEMINI_API_KEY
-    global GEMINI_MODEL, GEMINI_MODEL_CANDIDATES, LAW_DATASET_PATH, RAG_TOP_K, RAG_MAX_CONTEXT_CHARS
+    global GEMINI_MODEL, GEMINI_MODEL_CANDIDATES, LAW_DATASET_PATH, LAW_DATASET_URL, RAG_TOP_K, RAG_MAX_CONTEXT_CHARS
     global GEMINI_TEMPERATURE, GEMINI_MAX_OUTPUT_TOKENS, GEMINI_REQUEST_MAX_RETRIES, GEMINI_RETRY_BACKOFF_BASE
     global AZURE_ML_ENDPOINT, AZURE_ML_API_KEY, AZURE_ML_DEPLOYMENT, USE_AZURE_ENDPOINT, AZURE_TEMPERATURE
     global AZURE_MAX_TOKENS, AZURE_FREQUENCY_PENALTY, AZURE_PRESENCE_PENALTY, AZURE_INCLUDE_SYSTEM_PROMPT
@@ -152,6 +153,7 @@ def _refresh_settings_from_env() -> None:
         if candidate.strip()
     ]
     LAW_DATASET_PATH = os.getenv("LAW_DATASET_PATH", LAW_DATASET_PATH).strip()
+    LAW_DATASET_URL = os.getenv("LAW_DATASET_URL", LAW_DATASET_URL).strip().strip('"').strip("'")
     RAG_TOP_K = int(os.getenv("RAG_TOP_K", str(RAG_TOP_K)))
     RAG_MAX_CONTEXT_CHARS = int(os.getenv("RAG_MAX_CONTEXT_CHARS", str(RAG_MAX_CONTEXT_CHARS)))
     GEMINI_TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", str(GEMINI_TEMPERATURE)))
@@ -512,6 +514,29 @@ def _tokenize_rag_text(text: str) -> List[str]:
     return re.findall(r"[\u0600-\u06FF\w]+", _normalize_rag_text(text))
 
 
+def _download_law_dataset(dataset_path: Path) -> bool:
+    """Fetch the private law dataset from LAW_DATASET_URL (used in deployments
+    where the CSV is intentionally kept out of the public git repo)."""
+    if not LAW_DATASET_URL:
+        return False
+    try:
+        logger.info("Law dataset missing; downloading from LAW_DATASET_URL ...")
+        dataset_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = dataset_path.with_name(dataset_path.name + ".part")
+        with httpx.Client(timeout=300, follow_redirects=True) as cx:
+            with cx.stream("GET", LAW_DATASET_URL) as response:
+                response.raise_for_status()
+                with tmp_path.open("wb") as handle:
+                    for chunk in response.iter_bytes():
+                        handle.write(chunk)
+        tmp_path.replace(dataset_path)
+        logger.info("Law dataset downloaded to %s (%d bytes)", dataset_path, dataset_path.stat().st_size)
+        return True
+    except Exception as e:
+        logger.exception("Failed to download law dataset: %s", e)
+        return False
+
+
 def _load_law_dataset() -> List[dict]:
     global _law_dataset_cache
     if _law_dataset_cache is not None:
@@ -522,6 +547,8 @@ def _load_law_dataset() -> List[dict]:
             return _law_dataset_cache
 
         dataset_path = _resolve_law_dataset_path()
+        if not dataset_path.exists():
+            _download_law_dataset(dataset_path)
         if not dataset_path.exists():
             logger.warning("Law dataset not found at %s", dataset_path)
             _law_dataset_cache = []
