@@ -14,7 +14,9 @@ import {
 
 const RAW_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 const BASE = (RAW_BASE && RAW_BASE.length > 0 ? RAW_BASE : "/api").replace(/\/$/, "");
-const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 15000);
+// Generous default: free-tier hosts (Render) sleep when idle and take up to
+// ~90s to wake on the first request — a 15s timeout made every first visit fail.
+const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 90000);
 const STREAM_TIMEOUT_MS = Number(import.meta.env.VITE_STREAM_TIMEOUT_MS ?? 180000); // Increased from 60s to 180s for Azure processing time
 
 function parseApiErrorBody(body: string): string {
