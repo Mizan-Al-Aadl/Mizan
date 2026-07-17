@@ -113,21 +113,26 @@ def _refresh_settings_from_env() -> None:
 
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", GEMINI_API_KEY).strip().strip('"').strip("'")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", GEMINI_MODEL).strip()
-    GEMINI_MODEL_CANDIDATES = [
-        candidate.strip()
-        for candidate in os.getenv(
-            "GEMINI_MODEL_CANDIDATES",
-            ",".join(
-                [
-                    GEMINI_MODEL,
-                    "gemini-2.5-flash",
-                    "gemini-2.5-flash-lite",
-                    "gemini-2.5-pro",
-                ]
-            ),
-        ).split(",")
-        if candidate.strip()
-    ]
+    GEMINI_MODEL_CANDIDATES = list(
+        dict.fromkeys(  # dedupe while preserving order — duplicates double the retry burn
+            candidate.strip()
+            for candidate in os.getenv(
+                "GEMINI_MODEL_CANDIDATES",
+                ",".join(
+                    [
+                        GEMINI_MODEL,
+                        "gemini-2.5-flash",
+                        # flash-lite has its own separate free-tier quota, so it
+                        # keeps answers flowing when flash's daily quota runs out.
+                        # (gemini-2.5-pro is intentionally absent: it is not on
+                        # the free tier and would only waste a failing request.)
+                        "gemini-2.5-flash-lite",
+                    ]
+                ),
+            ).split(",")
+            if candidate.strip()
+        )
+    )
     LAW_DATASET_PATH = os.getenv("LAW_DATASET_PATH", LAW_DATASET_PATH).strip()
     LAW_DATASET_URL = os.getenv("LAW_DATASET_URL", LAW_DATASET_URL).strip().strip('"').strip("'")
     RAG_TOP_K = int(os.getenv("RAG_TOP_K", str(RAG_TOP_K)))
