@@ -20,6 +20,7 @@ except ImportError:
 import base64
 import secrets
 import smtplib
+from array import array
 from email.mime.text import MIMEText
 
 import httpx
@@ -184,6 +185,7 @@ _refresh_settings_from_env()
 _llm_instance = None
 _llm_lock = asyncio.Lock()
 _law_dataset_cache: Optional[List[dict]] = None
+_law_token_index: dict = {}
 _law_dataset_lock = threading.Lock()
 
 client = AsyncIOMotorClient(
@@ -581,7 +583,7 @@ def _download_law_dataset(dataset_path: Path) -> bool:
 
 
 def _load_law_dataset() -> List[dict]:
-    global _law_dataset_cache
+    global _law_dataset_cache, _law_token_index
     if _law_dataset_cache is not None:
         return _law_dataset_cache
 
@@ -597,7 +599,23 @@ def _load_law_dataset() -> List[dict]:
             _law_dataset_cache = []
             return _law_dataset_cache
 
+        # Static per-record score components (type prior + boosted phrases) are
+        # precomputed at load time; the token overlap uses a global inverted
+        # index instead of a per-record token set. This keeps scoring identical
+        # to the old per-record version while fitting in ~1/3 of the RAM —
+        # required for 512MB hosts like Render's free tier.
+        boosted_phrases = (
+            "قانون العمل",
+            "الصرف من الخدمة",
+            "تعويض الصرف",
+            "تعويض الصرف من الخدمة",
+            "الصرف التعسفي",
+            "فصل تعسفي",
+        )
+        row_fields = ("nationality", "questions", "Instruction", "output_text", "type", "input_text")
+
         records: List[dict] = []
+        token_index: dict = {}
         try:
             with dataset_path.open("r", encoding="utf-8-sig", newline="") as handle:
                 reader = csv.DictReader(handle)
@@ -613,57 +631,44 @@ def _load_law_dataset() -> List[dict]:
                         continue
 
                     normalized_text = _normalize_rag_text(combined_text)
+                    record_type = _normalize_rag_text(str(row.get("type", "") or ""))
+
+                    static_bonus = 0
+                    if record_type == "law":
+                        static_bonus += 18
+                    elif record_type == "case":
+                        static_bonus -= 8
+                    for phrase in boosted_phrases:
+                        if phrase in normalized_text:
+                            static_bonus += 8
+
+                    position = len(records)
+                    for token in set(_tokenize_rag_text(combined_text)):
+                        token_index.setdefault(sys.intern(token), array("I")).append(position)
+
                     records.append(
                         {
                             "index": index,
-                            "row": row,
-                            "type": _normalize_rag_text(str(row.get("type", "") or "")),
-                            "text": combined_text,
+                            "row": {field: str(row.get(field, "") or "") for field in row_fields},
+                            "type": record_type,
+                            "text_len": len(combined_text),
                             "normalized": normalized_text,
-                            "tokens": set(_tokenize_rag_text(combined_text)),
+                            "static_bonus": static_bonus,
+                            "match_fields": tuple(
+                                _normalize_rag_text(str(row.get(field, "") or ""))
+                                for field in ("questions", "Instruction", "type", "nationality")
+                            ),
                         }
                     )
         except Exception as e:
             logger.exception("Failed to load law dataset from %s: %s", dataset_path, e)
             records = []
+            token_index = {}
 
+        _law_token_index = token_index
         _law_dataset_cache = records
         logger.info("Loaded %d law dataset rows from %s", len(records), dataset_path)
         return _law_dataset_cache
-
-
-def _score_law_record(query_text: str, query_tokens: set[str], record: dict) -> int:
-    score = len(query_tokens.intersection(record["tokens"]))
-    normalized_record = record["normalized"]
-    record_type = record.get("type", "")
-
-    if record_type == "law":
-        score += 18
-    elif record_type == "case":
-        score -= 8
-
-    if query_text and query_text in normalized_record:
-        score += 12
-
-    boosted_phrases = (
-        "قانون العمل",
-        "الصرف من الخدمة",
-        "تعويض الصرف",
-        "تعويض الصرف من الخدمة",
-        "الصرف التعسفي",
-        "فصل تعسفي",
-    )
-    for phrase in boosted_phrases:
-        if phrase in normalized_record:
-            score += 8
-
-    row = record["row"]
-    for field in ("questions", "Instruction", "type", "nationality"):
-        value = _normalize_rag_text(str(row.get(field, "") or ""))
-        if value and value in query_text:
-            score += 3
-
-    return score
 
 
 def _retrieve_law_context(query_text: str, top_k: int) -> List[dict]:
@@ -674,11 +679,24 @@ def _retrieve_law_context(query_text: str, top_k: int) -> List[dict]:
     normalized_query = _normalize_rag_text(query_text)
     query_tokens = set(_tokenize_rag_text(normalized_query))
 
-    scored_records = [
-        (_score_law_record(normalized_query, query_tokens, record), record)
-        for record in records
-    ]
-    scored_records.sort(key=lambda item: (item[0], len(item[1]["text"])), reverse=True)
+    # Token overlap per record via the inverted index — equal to
+    # len(query_tokens & record_tokens) in the old per-record-set version.
+    overlap_counts: dict = {}
+    for token in query_tokens:
+        for position in _law_token_index.get(token, ()):
+            overlap_counts[position] = overlap_counts.get(position, 0) + 1
+
+    scored_records = []
+    for position, record in enumerate(records):
+        score = overlap_counts.get(position, 0) + record["static_bonus"]
+        if normalized_query and normalized_query in record["normalized"]:
+            score += 12
+        for value in record["match_fields"]:
+            if value and value in normalized_query:
+                score += 3
+        scored_records.append((score, record))
+
+    scored_records.sort(key=lambda item: (item[0], item[1]["text_len"]), reverse=True)
 
     selected = [record for score, record in scored_records if score > 0]
     law_selected = [record for record in selected if record.get("type") == "law"]
