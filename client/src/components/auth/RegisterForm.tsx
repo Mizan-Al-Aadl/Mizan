@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { registerSchema, type RegisterFormData } from "@/schemas/auth";
 import AuthSubmitButton from "./AuthSubmitButton";
 import FormField from "./FormField";
+import PasswordInput from "./PasswordInput";
 import PasswordRequirements from "./PasswordRequirements";
 
 interface RegisterFormProps {
@@ -63,12 +64,12 @@ export default function RegisterForm({ onSubmit, error }: RegisterFormProps) {
       </FormField>
 
       <FormField id="password" label="Password">
-        <Input id="password" type="password" autoComplete="new-password" {...register("password")} />
+        <PasswordInput id="password" autoComplete="new-password" {...register("password")} />
         <PasswordRequirements messages={passwordValidationMessages} />
       </FormField>
 
       <FormField id="confirmPassword" label="Confirm Password" error={errors.confirmPassword?.message}>
-        <Input id="confirmPassword" type="password" autoComplete="new-password" {...register("confirmPassword")} />
+        <PasswordInput id="confirmPassword" autoComplete="new-password" {...register("confirmPassword")} />
       </FormField>
 
       <AuthSubmitButton

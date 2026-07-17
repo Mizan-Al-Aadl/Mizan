@@ -28,6 +28,9 @@ export default function Sidebar({
 }: SidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const confirmDeleteChat = chats.find((c) => c.id === confirmDeleteId);
 
   const submitRename = (chatId: string, originalTitle: string) => {
     const trimmed = draftTitle.trim();
@@ -166,7 +169,7 @@ export default function Sidebar({
                       data-testid={`delete-chat-${c.id}`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onDelete(c.id);
+                        setConfirmDeleteId(c.id);
                       }}
                       className="btn btn-ghost btn-xs btn-square opacity-0 group-hover:opacity-100"
                       aria-label="حذف المحادثة"
@@ -194,6 +197,50 @@ export default function Sidebar({
           </div>
         </div>
       </aside>
+
+      {/* Delete confirmation dialog */}
+      {confirmDeleteId && (
+        <div
+          data-testid="delete-confirm-overlay"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setConfirmDeleteId(null)}
+        >
+          <div
+            dir="rtl"
+            role="alertdialog"
+            aria-modal="true"
+            className="bg-base-100 rounded-2xl p-6 w-full max-w-sm shadow-xl font-cairo"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-bold text-lg mb-2">حذف المحادثة؟</h3>
+            <p className="text-sm text-base-content/70 mb-1 truncate">
+              «{confirmDeleteChat?.title ?? "محادثة"}»
+            </p>
+            <p className="text-sm text-base-content/70 mb-5">
+              سيتم حذف المحادثة وجميع رسائلها نهائياً. لا يمكن التراجع عن هذا الإجراء.
+            </p>
+            <div className="flex gap-2 justify-start">
+              <button
+                data-testid="confirm-delete-btn"
+                className="btn btn-error btn-sm text-white"
+                onClick={() => {
+                  onDelete(confirmDeleteId);
+                  setConfirmDeleteId(null);
+                }}
+              >
+                حذف
+              </button>
+              <button
+                data-testid="cancel-delete-btn"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setConfirmDeleteId(null)}
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

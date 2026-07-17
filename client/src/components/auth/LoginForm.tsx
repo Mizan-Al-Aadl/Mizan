@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { loginSchema, type LoginFormData } from "@/schemas/auth";
 import AuthSubmitButton from "./AuthSubmitButton";
 import FormField from "./FormField";
+import PasswordInput from "./PasswordInput";
 
 interface LoginFormProps {
   onSubmit: (data: LoginFormData) => Promise<void>;
@@ -38,7 +39,7 @@ export default function LoginForm({ onSubmit, onGuestSubmit, guestIsSubmitting =
       </FormField>
 
       <FormField id="password" label="Password" error={errors.password?.message}>
-        <Input id="password" type="password" autoComplete="current-password" {...register("password")} />
+        <PasswordInput id="password" autoComplete="current-password" {...register("password")} />
       </FormField>
 
       <AuthSubmitButton
