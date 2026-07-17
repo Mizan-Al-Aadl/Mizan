@@ -654,6 +654,22 @@ def _build_gemini_prompt(history: List[dict], context: str) -> str:
     )
 
 
+GEMINI_QUOTA_MESSAGE = (
+    "وصلت الخدمة إلى الحد الأقصى للاستخدام المجاني اليوم. "
+    "يرجى المحاولة مجدداً بعد ساعات قليلة."
+)
+
+
+def _friendly_gemini_error(technical_message: str) -> str:
+    """Map quota-exhaustion errors to a user-facing Arabic message; the full
+    technical detail still goes to the server log for debugging."""
+    lowered = technical_message.lower()
+    if "429" in technical_message or "quota" in lowered or "resource_exhausted" in lowered:
+        logger.warning("Gemini quota exhausted: %s", technical_message[:300])
+        return GEMINI_QUOTA_MESSAGE
+    return technical_message
+
+
 def _extract_reply_from_gemini(data: dict) -> Optional[str]:
     candidates = data.get("candidates") or []
     for candidate in candidates:
@@ -781,8 +797,10 @@ async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
                     continue
 
         raise RuntimeError(
-            "Gemini response missing expected content. Tried models: "
-            f"{', '.join(GEMINI_MODEL_CANDIDATES)}. Last error: {last_error_message}"
+            _friendly_gemini_error(
+                "Gemini response missing expected content. Tried models: "
+                f"{', '.join(GEMINI_MODEL_CANDIDATES)}. Last error: {last_error_message}"
+            )
         )
     except httpx.HTTPStatusError as e:
         detail = ""
@@ -790,9 +808,11 @@ async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
             detail = e.response.text[:500]
         except Exception:
             detail = ""
-        raise RuntimeError(f"Gemini HTTP {e.response.status_code}: {detail}")
+        raise RuntimeError(_friendly_gemini_error(f"Gemini HTTP {e.response.status_code}: {detail}"))
     except httpx.TimeoutException:
-        raise RuntimeError(f"Gemini request timed out after {MODEL_HTTP_TIMEOUT_SECONDS} seconds")
+        raise RuntimeError("انتهت مهلة الاتصال بالمساعد. يرجى المحاولة مرة أخرى.")
+    except RuntimeError:
+        raise
     except Exception as e:
         raise RuntimeError(f"Gemini API unreachable: {e}")
 
@@ -985,7 +1005,7 @@ async def _call_gemini_document(question: str, file_bytes: bytes, mime_type: str
                         last_error_message = f"{model_name}: {detail or 'model not available'}"
                         logger.warning("Gemini model %s unavailable for document analysis, trying next candidate", model_name)
                         continue
-                    raise RuntimeError(f"Gemini HTTP {status}: {detail}")
+                    raise RuntimeError(_friendly_gemini_error(f"Gemini HTTP {status}: {detail}"))
 
                 if isinstance(data, dict):
                     error = data.get("error")
@@ -1002,11 +1022,13 @@ async def _call_gemini_document(question: str, file_bytes: bytes, mime_type: str
                     last_error_message = f"{model_name}: Gemini response missing expected content"
 
         raise RuntimeError(
-            "Gemini document analysis failed. Tried models: "
-            f"{', '.join(GEMINI_MODEL_CANDIDATES)}. Last error: {last_error_message}"
+            _friendly_gemini_error(
+                "Gemini document analysis failed. Tried models: "
+                f"{', '.join(GEMINI_MODEL_CANDIDATES)}. Last error: {last_error_message}"
+            )
         )
     except httpx.TimeoutException:
-        raise RuntimeError(f"Gemini request timed out after {MODEL_HTTP_TIMEOUT_SECONDS} seconds")
+        raise RuntimeError("انتهت مهلة الاتصال بالمساعد. يرجى المحاولة مرة أخرى.")
 
 
 async def _stream_gemini_rag(history: List[dict]) -> AsyncGenerator[str, None]:
