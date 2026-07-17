@@ -638,11 +638,14 @@ def _build_gemini_prompt(history: List[dict], context: str) -> str:
     context_text = context.strip() if context.strip() else "No closely matching passages were found in the dataset."
 
     return (
-        "Use only the retrieved Lebanese law context below to answer the user. "
-        "If the answer is not supported by the dataset, say that you could not find it in the law_dataset.\n\n"
+        "Use the retrieved Lebanese law context below when it is relevant to the user's question. "
+        "If the context does not contain the answer, answer honestly from your own knowledge of Lebanese law instead — "
+        "never reply that you could not find the answer or that the information is unavailable. "
+        "When your answer relies on general knowledge rather than the retrieved context, end with a brief note "
+        "(in Arabic) that the answer is based on general legal knowledge and it is best to verify with a lawyer.\n\n"
         f"Retrieved context:\n{context_text}\n\n"
         f"Recent conversation:\n{history_text or 'No prior conversation.'}\n\n"
-        "Answer the latest user question in Arabic, cite article numbers when present, and keep the answer grounded in the dataset."
+        "Answer the latest user question in Arabic and cite article numbers whenever you know them."
     )
 
 
