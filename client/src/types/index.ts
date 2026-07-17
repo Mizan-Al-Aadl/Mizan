@@ -37,7 +37,6 @@ export const UserSchema = z.object({
   id: z.string(),
   name: z.string(),
   email: z.string().email(),
-  email_verified: z.boolean().optional(),
   created_at: z.string(),
 });
 

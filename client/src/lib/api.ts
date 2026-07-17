@@ -83,38 +83,13 @@ export const apiRegister = (
   name: string,
   email: string,
   password: string
-): Promise<{ email: string; message: string }> =>
-  apiFetch(
-    "/auth/register",
-    z.object({ email: z.string(), message: z.string() }),
-    {
-      method: "POST",
-      body: JSON.stringify({ name, email, password }),
-    }
-  );
-
-export const apiVerifyEmail = (
-  email: string,
-  code: string
 ): Promise<{ token: string }> =>
   apiFetch(
-    "/auth/verify-email",
+    "/auth/register",
     z.object({ token: z.string() }),
     {
       method: "POST",
-      body: JSON.stringify({ email, code }),
-    }
-  );
-
-export const apiResendCode = (
-  email: string
-): Promise<{ ok: boolean; message?: string | null }> =>
-  apiFetch(
-    "/auth/resend-code",
-    z.object({ ok: z.boolean(), message: z.string().nullable().optional() }),
-    {
-      method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ name, email, password }),
     }
   );
 

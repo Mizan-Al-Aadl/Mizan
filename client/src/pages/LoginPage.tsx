@@ -33,11 +33,6 @@ export default function LoginPage() {
       await login(data.email, data.password);
       navigate("/app", { replace: true });
     } catch (err) {
-      if (err instanceof Error && err.message.includes("EMAIL_NOT_VERIFIED")) {
-        // Backend re-sent a verification code on this login attempt.
-        navigate("/verify-email", { state: { email: data.email.trim().toLowerCase() } });
-        return;
-      }
       setError(getLoginErrorMessage(err));
     }
   };

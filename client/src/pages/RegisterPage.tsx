@@ -29,8 +29,8 @@ export default function RegisterPage() {
   const handleSubmit = async (data: RegisterFormData) => {
     setError(null);
     try {
-      const email = await register(data.name, data.email, data.password);
-      navigate("/verify-email", { state: { email } });
+      await register(data.name, data.email, data.password);
+      navigate("/app", { replace: true });
     } catch (err) {
       setError(getRegisterErrorMessage(err));
     }

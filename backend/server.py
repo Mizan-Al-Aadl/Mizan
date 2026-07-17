@@ -18,10 +18,7 @@ except ImportError:
     Translator = None
 
 import base64
-import secrets
-import smtplib
 from array import array
-from email.mime.text import MIMEText
 
 import httpx
 from dotenv import load_dotenv
@@ -46,16 +43,6 @@ MONGO_SERVER_SELECTION_TIMEOUT_MS = 5000
 JWT_SECRET = "change-me"
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
-
-SMTP_HOST = ""
-SMTP_PORT = 587
-SMTP_USERNAME = ""
-SMTP_PASSWORD = ""
-SMTP_FROM_EMAIL = ""
-SMTP_USE_TLS = True
-VERIFICATION_CODE_TTL_MINUTES = 10
-VERIFICATION_RESEND_COOLDOWN_SECONDS = 60
-VERIFICATION_MAX_ATTEMPTS = 5
 
 USE_FINETUNED = False
 FINETUNED_MODEL_PATH = "C:/tmp/mizan-chatbot/mizan-q4_k_m.gguf"
@@ -105,8 +92,6 @@ def _refresh_settings_from_env() -> None:
     global AZURE_MAX_TOKENS, AZURE_FREQUENCY_PENALTY, AZURE_PRESENCE_PENALTY, AZURE_INCLUDE_SYSTEM_PROMPT
     global AZURE_HISTORY_MAX_MESSAGES, AZURE_CONTEXT_WINDOW, AZURE_AUTO_CONTINUE_ROUNDS, MODEL_HTTP_TIMEOUT_SECONDS
     global STREAM_KEEPALIVE_SECONDS, AZURE_REQUEST_MAX_RETRIES, AZURE_RETRY_BACKOFF_BASE
-    global SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM_EMAIL, SMTP_USE_TLS
-    global VERIFICATION_CODE_TTL_MINUTES, VERIFICATION_RESEND_COOLDOWN_SECONDS, VERIFICATION_MAX_ATTEMPTS
 
     load_dotenv(ROOT_DIR / ".env", override=True)
 
@@ -116,20 +101,6 @@ def _refresh_settings_from_env() -> None:
     JWT_SECRET = os.getenv("JWT_SECRET", JWT_SECRET).strip()
     JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", JWT_ALGORITHM).strip()
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", str(JWT_ACCESS_TOKEN_EXPIRE_MINUTES)))
-
-    SMTP_HOST = os.getenv("SMTP_HOST", SMTP_HOST).strip()
-    SMTP_PORT = int(os.getenv("SMTP_PORT", str(SMTP_PORT)))
-    SMTP_USERNAME = os.getenv("SMTP_USERNAME", SMTP_USERNAME).strip()
-    SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", SMTP_PASSWORD).strip().strip('"').strip("'")
-    if SMTP_HOST == "smtp.gmail.com":
-        # Google displays app passwords with spaces ("abcd efgh ijkl mnop");
-        # pasting them verbatim breaks SMTP auth, so normalize.
-        SMTP_PASSWORD = SMTP_PASSWORD.replace(" ", "")
-    SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", SMTP_FROM_EMAIL).strip()
-    SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
-    VERIFICATION_CODE_TTL_MINUTES = int(os.getenv("VERIFICATION_CODE_TTL_MINUTES", str(VERIFICATION_CODE_TTL_MINUTES)))
-    VERIFICATION_RESEND_COOLDOWN_SECONDS = int(os.getenv("VERIFICATION_RESEND_COOLDOWN_SECONDS", str(VERIFICATION_RESEND_COOLDOWN_SECONDS)))
-    VERIFICATION_MAX_ATTEMPTS = int(os.getenv("VERIFICATION_MAX_ATTEMPTS", str(VERIFICATION_MAX_ATTEMPTS)))
 
     USE_FINETUNED = os.getenv("USE_FINETUNED", "false").lower() == "true"
     FINETUNED_MODEL_PATH = os.getenv("FINETUNED_MODEL_PATH", FINETUNED_MODEL_PATH).strip()
@@ -299,11 +270,6 @@ class User(BaseModel):
     name: str
     email: str
     hashed_password: str
-    email_verified: bool = False
-    verification_code_hash: Optional[str] = None
-    verification_code_expires_at: Optional[str] = None
-    verification_sent_at: Optional[str] = None
-    verification_attempts: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -312,36 +278,12 @@ class UserOut(BaseModel):
     id: str
     name: str
     email: str
-    email_verified: bool = True
     created_at: str
 
 
 class TokenResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     token: str
-
-
-class VerificationPendingResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    email: str
-    message: str
-
-
-class OkResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    ok: bool
-    message: Optional[str] = None
-
-
-class VerifyEmailBody(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    email: str
-    code: str
-
-
-class ResendCodeBody(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    email: str
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -358,80 +300,6 @@ def create_access_token(subject_id: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode = {"sub": subject_id, "exp": expire}
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-
-def _generate_verification_code() -> str:
-    return f"{secrets.randbelow(1_000_000):06d}"
-
-
-def _send_verification_email_sync(to_email: str, code: str) -> None:
-    message = MIMEText(
-        f"رمز التحقق الخاص بك في ميزان هو: {code}\n"
-        f"الرمز صالح لمدة {VERIFICATION_CODE_TTL_MINUTES} دقائق.\n\n"
-        "إذا لم تطلب هذا الرمز، يمكنك تجاهل هذه الرسالة.",
-        "plain",
-        "utf-8",
-    )
-    message["Subject"] = "رمز التحقق - ميزان"
-    message["From"] = SMTP_FROM_EMAIL or SMTP_USERNAME
-    message["To"] = to_email
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
-        if SMTP_USE_TLS:
-            smtp.starttls()
-        if SMTP_USERNAME:
-            smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
-        smtp.sendmail(message["From"], [to_email], message.as_string())
-
-
-async def _send_verification_email(to_email: str, code: str) -> None:
-    if not SMTP_HOST:
-        logger.warning(
-            "SMTP not configured; verification code for %s is %s (not emailed, dev fallback)",
-            to_email,
-            code,
-        )
-        return
-    try:
-        await asyncio.to_thread(_send_verification_email_sync, to_email, code)
-    except Exception as e:
-        logger.exception("Failed to send verification email to %s: %s", to_email, e)
-        raise RuntimeError(f"Failed to send verification email: {e}")
-
-
-async def _issue_verification_code(user_doc: dict, force: bool = False) -> bool:
-    """Generate and email a fresh verification code for a user.
-
-    Returns False (no-op) if a code was already sent within the resend
-    cooldown window and force is not set, so repeated login/resend attempts
-    don't spam the inbox or the SMTP provider.
-    """
-    now = datetime.now(timezone.utc)
-    if not force:
-        sent_at_str = user_doc.get("verification_sent_at")
-        if sent_at_str:
-            try:
-                sent_at = datetime.fromisoformat(sent_at_str)
-                if (now - sent_at).total_seconds() < VERIFICATION_RESEND_COOLDOWN_SECONDS:
-                    return False
-            except ValueError:
-                pass
-
-    code = _generate_verification_code()
-    expires_at = now + timedelta(minutes=VERIFICATION_CODE_TTL_MINUTES)
-    await db.users.update_one(
-        {"id": user_doc["id"]},
-        {
-            "$set": {
-                "verification_code_hash": hash_password(code),
-                "verification_code_expires_at": expires_at.isoformat(),
-                "verification_sent_at": now.isoformat(),
-                "verification_attempts": 0,
-            }
-        },
-    )
-    await _send_verification_email(user_doc["email"], code)
-    return True
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UserOut:
@@ -461,7 +329,6 @@ async def _create_guest_user() -> UserOut:
         name="Guest",
         email=f"guest-{uuid.uuid4().hex}@mizan.local",
         hashed_password=hash_password(f"guest-{uuid.uuid4().hex}"),
-        email_verified=True,
     )
     doc = guest_user.model_dump()
     doc["is_guest"] = True  # marker for future cleanup of stale guest accounts
@@ -1599,7 +1466,7 @@ async def health():
     }
 
 
-@api.post("/auth/register", response_model=VerificationPendingResponse)
+@api.post("/auth/register", response_model=TokenResponse)
 async def register(body: UserCreate):
     email = body.email.strip().lower()
     if not body.name.strip():
@@ -1616,20 +1483,10 @@ async def register(body: UserCreate):
         name=body.name.strip(),
         email=email,
         hashed_password=hashed_password,
-        email_verified=False,
     )
     await db.users.insert_one(user.model_dump())
-    try:
-        await _issue_verification_code(user.model_dump(), force=True)
-    except Exception as e:
-        # Don't strand a half-created account that can never receive its code —
-        # remove it so the user can simply retry once email sending is fixed.
-        await db.users.delete_one({"id": user.id})
-        logger.error("Rolled back registration for %s: %s", email, e)
-        # Surface the SMTP failure reason (host/auth rejection text only — no
-        # credentials appear in these errors) so misconfiguration is debuggable.
-        raise HTTPException(502, f"Could not send the verification email: {e}")
-    return VerificationPendingResponse(email=email, message="Verification code sent to your email")
+    token = create_access_token(user.id)
+    return TokenResponse(token=token)
 
 
 @api.post("/auth/login", response_model=TokenResponse)
@@ -1639,77 +1496,8 @@ async def login(body: UserLogin):
     if not user_doc or not verify_password(body.password, user_doc["hashed_password"]):
         raise HTTPException(401, "Invalid email or password")
 
-    if not user_doc.get("email_verified", True):
-        try:
-            await _issue_verification_code(user_doc)
-        except Exception as e:
-            logger.error("Could not send verification code during login for %s: %s", email, e)
-        raise HTTPException(403, "EMAIL_NOT_VERIFIED")
-
     token = create_access_token(user_doc["id"])
     return TokenResponse(token=token)
-
-
-@api.post("/auth/verify-email", response_model=TokenResponse)
-async def verify_email(body: VerifyEmailBody):
-    email = body.email.strip().lower()
-    code = body.code.strip()
-    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
-    if not user_doc:
-        raise HTTPException(404, "User not found")
-
-    if user_doc.get("email_verified", False):
-        token = create_access_token(user_doc["id"])
-        return TokenResponse(token=token)
-
-    code_hash = user_doc.get("verification_code_hash")
-    expires_at_str = user_doc.get("verification_code_expires_at")
-    if not code_hash or not expires_at_str:
-        raise HTTPException(400, "No verification code found. Please request a new one.")
-
-    if datetime.now(timezone.utc) > datetime.fromisoformat(expires_at_str):
-        raise HTTPException(400, "Verification code has expired. Please request a new one.")
-
-    if user_doc.get("verification_attempts", 0) >= VERIFICATION_MAX_ATTEMPTS:
-        raise HTTPException(429, "Too many incorrect attempts. Please request a new code.")
-
-    if not verify_password(code, code_hash):
-        await db.users.update_one({"id": user_doc["id"]}, {"$inc": {"verification_attempts": 1}})
-        raise HTTPException(400, "Invalid verification code")
-
-    await db.users.update_one(
-        {"id": user_doc["id"]},
-        {
-            "$set": {"email_verified": True},
-            "$unset": {
-                "verification_code_hash": "",
-                "verification_code_expires_at": "",
-                "verification_sent_at": "",
-                "verification_attempts": "",
-            },
-        },
-    )
-    token = create_access_token(user_doc["id"])
-    return TokenResponse(token=token)
-
-
-@api.post("/auth/resend-code", response_model=OkResponse)
-async def resend_code(body: ResendCodeBody):
-    email = body.email.strip().lower()
-    user_doc = await db.users.find_one({"email": email}, {"_id": 0})
-    if not user_doc:
-        raise HTTPException(404, "User not found")
-    if user_doc.get("email_verified", False):
-        raise HTTPException(400, "Email already verified")
-
-    try:
-        sent = await _issue_verification_code(user_doc)
-    except Exception as e:
-        logger.error("Could not send verification code (resend) for %s: %s", email, e)
-        raise HTTPException(502, "Could not send the verification email. Please try again later.")
-    if not sent:
-        raise HTTPException(429, "Please wait before requesting another code")
-    return OkResponse(ok=True, message="Verification code sent")
 
 
 @api.post("/auth/guest", response_model=TokenResponse)
