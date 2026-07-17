@@ -514,23 +514,66 @@ def _tokenize_rag_text(text: str) -> List[str]:
     return re.findall(r"[\u0600-\u06FF\w]+", _normalize_rag_text(text))
 
 
+def _convert_xlsx_to_csv(xlsx_path: Path, csv_path: Path) -> None:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(filename=xlsx_path, read_only=True, data_only=True)
+    try:
+        worksheet = workbook.active
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            for row in worksheet.iter_rows(values_only=True):
+                writer.writerow(["" if cell is None else cell for cell in row])
+    finally:
+        workbook.close()
+
+
 def _download_law_dataset(dataset_path: Path) -> bool:
     """Fetch the private law dataset from LAW_DATASET_URL (used in deployments
-    where the CSV is intentionally kept out of the public git repo)."""
+    where the spreadsheet is intentionally kept out of the public git repo).
+
+    Accepts either a CSV or an XLSX workbook; XLSX is converted to the CSV
+    the loader expects. Dropbox share links are normalized to direct downloads.
+    """
     if not LAW_DATASET_URL:
         return False
     try:
+        url = LAW_DATASET_URL
+        if "dropbox.com" in url:
+            url = url.replace("dl=0", "dl=1")
         logger.info("Law dataset missing; downloading from LAW_DATASET_URL ...")
         dataset_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = dataset_path.with_name(dataset_path.name + ".part")
         with httpx.Client(timeout=300, follow_redirects=True) as cx:
-            with cx.stream("GET", LAW_DATASET_URL) as response:
+            with cx.stream("GET", url) as response:
                 response.raise_for_status()
                 with tmp_path.open("wb") as handle:
                     for chunk in response.iter_bytes():
                         handle.write(chunk)
-        tmp_path.replace(dataset_path)
-        logger.info("Law dataset downloaded to %s (%d bytes)", dataset_path, dataset_path.stat().st_size)
+
+        with tmp_path.open("rb") as handle:
+            magic = handle.read(4)
+
+        if magic[:2] == b"PK":
+            # XLSX workbook (zip container) — convert to CSV for the loader
+            logger.info("Downloaded dataset is an XLSX workbook; converting to CSV ...")
+            xlsx_path = tmp_path.with_name(tmp_path.name + ".xlsx")  # openpyxl requires the extension
+            tmp_path.replace(xlsx_path)
+            try:
+                _convert_xlsx_to_csv(xlsx_path, dataset_path)
+            finally:
+                xlsx_path.unlink()
+        elif magic[:1] == b"<":
+            # HTML page (e.g. a Dropbox preview link) — not the file itself
+            tmp_path.unlink()
+            raise RuntimeError(
+                "LAW_DATASET_URL returned an HTML page, not the dataset. "
+                "For Dropbox links make sure the URL ends with dl=1."
+            )
+        else:
+            tmp_path.replace(dataset_path)
+
+        logger.info("Law dataset ready at %s (%d bytes)", dataset_path, dataset_path.stat().st_size)
         return True
     except Exception as e:
         logger.exception("Failed to download law dataset: %s", e)
@@ -864,15 +907,15 @@ UPLOADS_DIR = ROOT_DIR / "uploads"
 
 PDF_FONT_CANDIDATES = [
     os.getenv("PDF_FONT_PATH", "").strip(),
+    str(ROOT_DIR / "fonts" / "Amiri-Regular.ttf"),  # bundled, works on any host
     "C:/Windows/Fonts/arial.ttf",
     "C:/Windows/Fonts/tahoma.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 ]
 PDF_BOLD_FONT_CANDIDATES = [
     os.getenv("PDF_BOLD_FONT_PATH", "").strip(),
+    str(ROOT_DIR / "fonts" / "Amiri-Bold.ttf"),
     "C:/Windows/Fonts/arialbd.ttf",
     "C:/Windows/Fonts/tahomabd.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 ]
 
 _PDF_REQUEST_KEYWORDS = ("pdf", "بي دي اف", "بي دي إف")
