@@ -2051,6 +2051,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    # Optional regex for origins that vary per deployment (e.g. Vercel preview
+    # URLs like https://mizan-abc123-team.vercel.app). Set CORS_ORIGIN_REGEX
+    # alongside CORS_ORIGINS; either match allows the request.
+    allow_origin_regex=os.environ.get("CORS_ORIGIN_REGEX") or None,
     allow_methods=["*"],
     allow_headers=["*"],
 )
