@@ -295,7 +295,16 @@ export default function MizanApp() {
               resolve();
               return;
             }
-            toast.error(`خطأ من المساعد: ${msg}`);
+            // Show the error inside the conversation — toasts vanish before
+            // most users notice them, leaving what looks like a silent failure.
+            const errorMsg: Message = {
+              id: `error-${Date.now()}`,
+              chat_id: chatId!,
+              role: "assistant",
+              content: msg,
+              created_at: new Date().toISOString(),
+            };
+            setMessages((prev) => [...prev, errorMsg]);
             setStreamingText("");
             setSending(false);
             streamControllerRef.current = null;

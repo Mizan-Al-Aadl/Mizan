@@ -121,12 +121,14 @@ def _refresh_settings_from_env() -> None:
                 ",".join(
                     [
                         GEMINI_MODEL,
-                        "gemini-2.5-flash",
-                        # flash-lite has its own separate free-tier quota, so it
-                        # keeps answers flowing when flash's daily quota runs out.
-                        # (gemini-2.5-pro is intentionally absent: it is not on
-                        # the free tier and would only waste a failing request.)
-                        "gemini-2.5-flash-lite",
+                        # The -latest aliases track whatever Google currently
+                        # serves, so the list survives model renames/retirements.
+                        # Each model family has its own free-tier quota, so the
+                        # chain keeps answers flowing when one quota runs out.
+                        "gemini-flash-latest",
+                        "gemini-3-flash-preview",
+                        "gemini-flash-lite-latest",
+                        "gemini-3.1-flash-lite",
                     ]
                 ),
             ).split(",")
@@ -721,6 +723,7 @@ async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
     try:
         async with httpx.AsyncClient(timeout=MODEL_HTTP_TIMEOUT_SECONDS) as cx:
             last_error_message = ""
+            saw_quota = False
             for model_name in GEMINI_MODEL_CANDIDATES:
                 url = (
                     f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -749,7 +752,15 @@ async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
                                 logger.warning("Gemini model %s unavailable, trying next candidate", model_name)
                                 break
 
-                            if status in {408, 429, 500, 502, 503, 504} and attempt <= GEMINI_REQUEST_MAX_RETRIES:
+                            if status == 429:
+                                # Quota won't recover within a retry backoff —
+                                # go straight to the next model (separate quota).
+                                saw_quota = True
+                                last_error_message = f"{model_name}: HTTP 429: {detail}"
+                                logger.warning("Gemini model %s quota exhausted, trying next candidate", model_name)
+                                break
+
+                            if status in {408, 500, 502, 503, 504} and attempt <= GEMINI_REQUEST_MAX_RETRIES:
                                 backoff = GEMINI_RETRY_BACKOFF_BASE ** (attempt - 1)
                                 logger.warning("Gemini HTTP %s on attempt %s for %s, retrying after %.1fs", status, attempt, model_name, backoff)
                                 await asyncio.sleep(backoff)
@@ -796,6 +807,9 @@ async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
                     last_error_message = f"{model_name}: HTTP {e.response.status_code}: {detail}"
                     continue
 
+        if saw_quota:
+            logger.warning("All Gemini candidates exhausted (quota). Last error: %s", last_error_message[:300])
+            raise RuntimeError(GEMINI_QUOTA_MESSAGE)
         raise RuntimeError(
             _friendly_gemini_error(
                 "Gemini response missing expected content. Tried models: "
@@ -985,6 +999,7 @@ async def _call_gemini_document(question: str, file_bytes: bytes, mime_type: str
     try:
         async with httpx.AsyncClient(timeout=MODEL_HTTP_TIMEOUT_SECONDS) as cx:
             last_error_message = ""
+            saw_quota = False
             for model_name in GEMINI_MODEL_CANDIDATES:
                 url = (
                     f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -1001,9 +1016,11 @@ async def _call_gemini_document(question: str, file_bytes: bytes, mime_type: str
                         detail = e.response.text[:500]
                     except Exception:
                         detail = ""
-                    if status == 404:
-                        last_error_message = f"{model_name}: {detail or 'model not available'}"
-                        logger.warning("Gemini model %s unavailable for document analysis, trying next candidate", model_name)
+                    if status in {404, 429}:
+                        if status == 429:
+                            saw_quota = True
+                        last_error_message = f"{model_name}: HTTP {status}: {detail or 'model not available'}"
+                        logger.warning("Gemini model %s failed (%s) for document analysis, trying next candidate", model_name, status)
                         continue
                     raise RuntimeError(_friendly_gemini_error(f"Gemini HTTP {status}: {detail}"))
 
@@ -1021,6 +1038,9 @@ async def _call_gemini_document(question: str, file_bytes: bytes, mime_type: str
                         continue
                     last_error_message = f"{model_name}: Gemini response missing expected content"
 
+        if saw_quota:
+            logger.warning("All Gemini candidates exhausted for document analysis (quota). Last error: %s", last_error_message[:300])
+            raise RuntimeError(GEMINI_QUOTA_MESSAGE)
         raise RuntimeError(
             _friendly_gemini_error(
                 "Gemini document analysis failed. Tried models: "
