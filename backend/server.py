@@ -1626,7 +1626,9 @@ async def register(body: UserCreate):
         # remove it so the user can simply retry once email sending is fixed.
         await db.users.delete_one({"id": user.id})
         logger.error("Rolled back registration for %s: %s", email, e)
-        raise HTTPException(502, "Could not send the verification email. Please try again later.")
+        # Surface the SMTP failure reason (host/auth rejection text only — no
+        # credentials appear in these errors) so misconfiguration is debuggable.
+        raise HTTPException(502, f"Could not send the verification email: {e}")
     return VerificationPendingResponse(email=email, message="Verification code sent to your email")
 
 
