@@ -121,6 +121,10 @@ def _refresh_settings_from_env() -> None:
     SMTP_PORT = int(os.getenv("SMTP_PORT", str(SMTP_PORT)))
     SMTP_USERNAME = os.getenv("SMTP_USERNAME", SMTP_USERNAME).strip()
     SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", SMTP_PASSWORD).strip().strip('"').strip("'")
+    if SMTP_HOST == "smtp.gmail.com":
+        # Google displays app passwords with spaces ("abcd efgh ijkl mnop");
+        # pasting them verbatim breaks SMTP auth, so normalize.
+        SMTP_PASSWORD = SMTP_PASSWORD.replace(" ", "")
     SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", SMTP_FROM_EMAIL).strip()
     SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
     VERIFICATION_CODE_TTL_MINUTES = int(os.getenv("VERIFICATION_CODE_TTL_MINUTES", str(VERIFICATION_CODE_TTL_MINUTES)))
@@ -1615,7 +1619,14 @@ async def register(body: UserCreate):
         email_verified=False,
     )
     await db.users.insert_one(user.model_dump())
-    await _issue_verification_code(user.model_dump(), force=True)
+    try:
+        await _issue_verification_code(user.model_dump(), force=True)
+    except Exception as e:
+        # Don't strand a half-created account that can never receive its code —
+        # remove it so the user can simply retry once email sending is fixed.
+        await db.users.delete_one({"id": user.id})
+        logger.error("Rolled back registration for %s: %s", email, e)
+        raise HTTPException(502, "Could not send the verification email. Please try again later.")
     return VerificationPendingResponse(email=email, message="Verification code sent to your email")
 
 
@@ -1627,7 +1638,10 @@ async def login(body: UserLogin):
         raise HTTPException(401, "Invalid email or password")
 
     if not user_doc.get("email_verified", True):
-        await _issue_verification_code(user_doc)
+        try:
+            await _issue_verification_code(user_doc)
+        except Exception as e:
+            logger.error("Could not send verification code during login for %s: %s", email, e)
         raise HTTPException(403, "EMAIL_NOT_VERIFIED")
 
     token = create_access_token(user_doc["id"])
@@ -1686,7 +1700,11 @@ async def resend_code(body: ResendCodeBody):
     if user_doc.get("email_verified", False):
         raise HTTPException(400, "Email already verified")
 
-    sent = await _issue_verification_code(user_doc)
+    try:
+        sent = await _issue_verification_code(user_doc)
+    except Exception as e:
+        logger.error("Could not send verification code (resend) for %s: %s", email, e)
+        raise HTTPException(502, "Could not send the verification email. Please try again later.")
     if not sent:
         raise HTTPException(429, "Please wait before requesting another code")
     return OkResponse(ok=True, message="Verification code sent")
