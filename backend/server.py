@@ -771,7 +771,9 @@ async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
         return None
 
     query_text = "\n".join(str(message.get("content", "") or "") for message in history[-6:]).strip()
-    records = _retrieve_law_context(query_text, max(1, RAG_TOP_K))
+    # Retrieval (and the first-call dataset download/parse) is CPU/IO heavy —
+    # run it off the event loop so slow hosts don't stall every request.
+    records = await asyncio.to_thread(_retrieve_law_context, query_text, max(1, RAG_TOP_K))
     context = _format_rag_context(records)
 
     # If no retrieved context is available, fall back to a generative prompt
@@ -1546,7 +1548,9 @@ async def root():
 
 @api.get("/health")
 async def health():
-    dataset_records = _load_law_dataset()
+    # Report the cache state without triggering the (slow) initial load —
+    # startup warms the dataset in a background thread.
+    dataset_records = _law_dataset_cache or []
     return {
         "status": "ok",
         "local_chatbot": bool(CHATBOT_LOCAL_URL),
@@ -1557,6 +1561,7 @@ async def health():
             "model": GEMINI_MODEL,
             "dataset_path": str(_resolve_law_dataset_path()),
             "dataset_loaded": bool(dataset_records),
+            "dataset_loading": _law_dataset_cache is None,
             "dataset_rows": len(dataset_records),
             "top_k": RAG_TOP_K,
         },
@@ -2029,6 +2034,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def warm_law_dataset():
+    # Download/convert/index the law dataset off the event loop so the server
+    # answers requests immediately while the RAG index warms up in background.
+    threading.Thread(target=_load_law_dataset, daemon=True).start()
 
 
 @app.on_event("shutdown")
