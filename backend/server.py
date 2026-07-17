@@ -446,20 +446,22 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     return UserOut(**user_doc)
 
 
-async def _get_or_create_guest_user() -> UserOut:
-    guest_email = "guest@mizan.local"
-    existing = await db.users.find_one({"email": guest_email}, {"_id": 0})
-    if existing:
-        return UserOut(**existing)
+async def _create_guest_user() -> UserOut:
+    """Create a fresh, isolated guest account per guest session.
 
-    guest_password = f"guest-{uuid.uuid4().hex}"
+    Each visitor gets their own user so guests can never see each other's
+    chats. The random email/password are never shown; the session lives in
+    the issued JWT only.
+    """
     guest_user = User(
         name="Guest",
-        email=guest_email,
-        hashed_password=hash_password(guest_password),
+        email=f"guest-{uuid.uuid4().hex}@mizan.local",
+        hashed_password=hash_password(f"guest-{uuid.uuid4().hex}"),
         email_verified=True,
     )
-    await db.users.insert_one(guest_user.model_dump())
+    doc = guest_user.model_dump()
+    doc["is_guest"] = True  # marker for future cleanup of stale guest accounts
+    await db.users.insert_one(doc)
     return UserOut(**guest_user.model_dump())
 
 
@@ -1692,7 +1694,7 @@ async def resend_code(body: ResendCodeBody):
 
 @api.post("/auth/guest", response_model=TokenResponse)
 async def guest_login():
-    guest_user = await _get_or_create_guest_user()
+    guest_user = await _create_guest_user()
     token = create_access_token(guest_user.id)
     return TokenResponse(token=token)
 
