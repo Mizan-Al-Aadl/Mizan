@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { getToken } from "./auth.ts";
 import {
+  Case,
+  CaseInput,
+  CaseSchema,
   Chat,
   ChatSchema,
   Message,
@@ -140,6 +143,28 @@ export const updateChat = (id: string, title: string): Promise<Chat> =>
 
 export const listMessages = (chatId: string): Promise<Message[]> =>
   apiFetch(`/chats/${chatId}/messages`, z.array(MessageSchema));
+
+// ─── Cases ────────────────────────────────────────────────────────────────────
+
+export const listCases = (): Promise<Case[]> =>
+  apiFetch("/cases", z.array(CaseSchema));
+
+export const createCase = (input: CaseInput): Promise<Case> =>
+  apiFetch("/cases", CaseSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const updateCase = (id: string, input: Partial<CaseInput>): Promise<Case> =>
+  apiFetch(`/cases/${id}`, CaseSchema, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+
+export const deleteCase = (id: string): Promise<{ ok: boolean }> =>
+  apiFetch(`/cases/${id}`, z.object({ ok: z.boolean() }), {
+    method: "DELETE",
+  });
 
 // ─── Document analysis ────────────────────────────────────────────────────────
 

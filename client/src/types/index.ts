@@ -28,6 +28,36 @@ export const MessageSchema = z.object({
   created_at: z.string(),
 });
 
+export const CaseSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  case_number: z.string(),
+  court: z.string(),
+  client_name: z.string(),
+  opponent_name: z.string(),
+  status: z.enum(["pending", "won", "lost"]),
+  next_hearing_date: z.string().nullable().optional(),
+  reply_memo_done: z.boolean(),
+  notes: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export type Case = z.infer<typeof CaseSchema>;
+export type CaseStatus = Case["status"];
+
+export type CaseInput = {
+  title: string;
+  case_number?: string;
+  court?: string;
+  client_name?: string;
+  opponent_name?: string;
+  status?: CaseStatus;
+  next_hearing_date?: string | null;
+  reply_memo_done?: boolean;
+  notes?: string;
+};
+
 export const HealthSchema = z.object({
   status: z.string(),
   local_chatbot: z.boolean(),

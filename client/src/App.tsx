@@ -3,6 +3,7 @@ import HomePage from "./pages/HomePage";
 import MizanApp from "./pages/MizanApp";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
+import CasesPage from "./pages/CasesPage";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 
 export default function App() {
@@ -14,6 +15,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <MizanApp />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/cases"
+        element={
+          <ProtectedRoute>
+            <CasesPage />
           </ProtectedRoute>
         }
       />

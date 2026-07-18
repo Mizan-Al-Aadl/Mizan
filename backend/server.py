@@ -359,6 +359,92 @@ class SendMessageBody(BaseModel):
     use_finetuned: bool = False
 
 
+CASE_STATUSES = {"pending", "won", "lost"}
+CASE_STATUS_LABELS = {"pending": "قيد النظر", "won": "رابحة", "lost": "خاسرة"}
+
+
+class Case(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    title: str
+    case_number: str = ""
+    court: str = ""
+    client_name: str = ""
+    opponent_name: str = ""
+    status: str = "pending"
+    next_hearing_date: Optional[str] = None  # ISO date "YYYY-MM-DD"
+    reply_memo_done: bool = False  # لائحة جوابية
+    notes: str = ""
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class CaseCreate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    title: str
+    case_number: str = ""
+    court: str = ""
+    client_name: str = ""
+    opponent_name: str = ""
+    status: str = "pending"
+    next_hearing_date: Optional[str] = None
+    reply_memo_done: bool = False
+    notes: str = ""
+
+
+class CaseUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    title: Optional[str] = None
+    case_number: Optional[str] = None
+    court: Optional[str] = None
+    client_name: Optional[str] = None
+    opponent_name: Optional[str] = None
+    status: Optional[str] = None
+    next_hearing_date: Optional[str] = None
+    reply_memo_done: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+def _validate_case_status(status: Optional[str]) -> None:
+    if status is not None and status not in CASE_STATUSES:
+        raise HTTPException(400, "حالة القضية يجب أن تكون: pending أو won أو lost")
+
+
+async def _build_cases_context(user_id: str) -> str:
+    """Format the lawyer's saved cases as a context block for the model so it
+    can answer questions like "متى جلستي القادمة؟" about their own cases."""
+    docs = await db.cases.find({"user_id": user_id}, {"_id": 0}).to_list(200)
+    if not docs:
+        return ""
+
+    docs.sort(key=lambda d: (d.get("next_hearing_date") is None, d.get("next_hearing_date") or ""))
+
+    lines: List[str] = []
+    for idx, doc in enumerate(docs, start=1):
+        parts = [f"[{idx}] القضية: {doc.get('title', '')}"]
+        if doc.get("case_number"):
+            parts.append(f"رقم القضية: {doc['case_number']}")
+        if doc.get("court"):
+            parts.append(f"المحكمة: {doc['court']}")
+        if doc.get("client_name"):
+            parts.append(f"الموكّل: {doc['client_name']}")
+        if doc.get("opponent_name"):
+            parts.append(f"الخصم: {doc['opponent_name']}")
+        parts.append(f"الحالة: {CASE_STATUS_LABELS.get(doc.get('status', 'pending'), doc.get('status', ''))}")
+        if doc.get("next_hearing_date"):
+            parts.append(f"موعد الجلسة القادمة: {doc['next_hearing_date']}")
+        parts.append(f"اللائحة الجوابية: {'جاهزة' if doc.get('reply_memo_done') else 'غير جاهزة بعد'}")
+        if doc.get("notes"):
+            parts.append(f"ملاحظات: {doc['notes']}")
+        lines.append(" | ".join(parts))
+
+    block = "\n".join(lines)
+    if len(block) > 4000:
+        block = block[:4000].rstrip()
+    today = datetime.now(timezone.utc).date().isoformat()
+    return f"تاريخ اليوم: {today}\nقضايا المحامي المسجّلة في النظام:\n{block}"
+
+
 async def _generate_title_from_first_message(text: str) -> str:
     t = text.strip().replace("\n", " ")
     return (t[:40] + "…") if len(t) > 40 else (t or "محادثة جديدة")
@@ -631,7 +717,7 @@ def _format_rag_context(records: List[dict]) -> str:
     return "\n\n".join(sections)
 
 
-def _build_gemini_prompt(history: List[dict], context: str) -> str:
+def _build_gemini_prompt(history: List[dict], context: str, cases_context: str = "") -> str:
     recent_history = history[-6:]
     history_lines = []
     for message in recent_history:
@@ -644,12 +730,22 @@ def _build_gemini_prompt(history: List[dict], context: str) -> str:
     history_text = "\n".join(history_lines).strip()
     context_text = context.strip() if context.strip() else "No closely matching passages were found in the dataset."
 
+    cases_block = ""
+    if cases_context.strip():
+        cases_block = (
+            "The user is a lawyer. Below are their registered cases. When the question is about "
+            "their own cases (upcoming hearings, case status, whether the reply memo لائحة جوابية "
+            "is done, client or opponent names…), answer from this list.\n\n"
+            f"{cases_context.strip()}\n\n"
+        )
+
     return (
         "Use the retrieved Lebanese law context below when it is relevant to the user's question. "
         "If the context does not contain the answer, answer honestly from your own knowledge of Lebanese law instead — "
         "never reply that you could not find the answer or that the information is unavailable. "
         "When your answer relies on general knowledge rather than the retrieved context, end with a brief note "
         "(in Arabic) that the answer is based on general legal knowledge and it is best to verify with a lawyer.\n\n"
+        f"{cases_block}"
         f"Retrieved context:\n{context_text}\n\n"
         f"Recent conversation:\n{history_text or 'No prior conversation.'}\n\n"
         "Answer the latest user question in Arabic and cite article numbers whenever you know them."
@@ -683,7 +779,7 @@ def _extract_reply_from_gemini(data: dict) -> Optional[str]:
     return None
 
 
-async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
+async def _call_gemini_rag(history: List[dict], cases_context: str = "") -> Optional[str]:
     if not GEMINI_API_KEY:
         return None
 
@@ -695,8 +791,9 @@ async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
 
     # If no retrieved context is available, fall back to a generative prompt
     # so the model can answer from its general knowledge instead of replying
-    # that nothing was found in the dataset.
-    generative_mode = not bool(context.strip())
+    # that nothing was found in the dataset. The lawyer's cases (if any) still
+    # ride along so case questions work either way.
+    generative_mode = not bool(context.strip()) and not bool(cases_context.strip())
 
     if generative_mode:
         # Use recent user messages as the query for a generative answer.
@@ -710,7 +807,7 @@ async def _call_gemini_rag(history: List[dict]) -> Optional[str]:
             },
         }
     else:
-        prompt = _build_gemini_prompt(history, context)
+        prompt = _build_gemini_prompt(history, context, cases_context)
         payload = {
             "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -1051,8 +1148,8 @@ async def _call_gemini_document(question: str, file_bytes: bytes, mime_type: str
         raise RuntimeError("انتهت مهلة الاتصال بالمساعد. يرجى المحاولة مرة أخرى.")
 
 
-async def _stream_gemini_rag(history: List[dict]) -> AsyncGenerator[str, None]:
-    reply = await _call_gemini_rag(history)
+async def _stream_gemini_rag(history: List[dict], cases_context: str = "") -> AsyncGenerator[str, None]:
+    reply = await _call_gemini_rag(history, cases_context)
     if not reply:
         raise RuntimeError("Gemini API unreachable or returned empty reply")
 
@@ -1654,6 +1751,53 @@ async def list_messages(chat_id: str, current_user: UserOut = Depends(get_curren
     return docs
 
 
+@api.get("/cases", response_model=List[Case])
+async def list_cases(current_user: UserOut = Depends(get_current_user)):
+    docs = await db.cases.find({"user_id": current_user.id}, {"_id": 0}).to_list(500)
+    # Upcoming hearings first, cases without a date last.
+    docs.sort(key=lambda d: (d.get("next_hearing_date") is None, d.get("next_hearing_date") or "", d.get("created_at") or ""))
+    return docs
+
+
+@api.post("/cases", response_model=Case)
+async def create_case(body: CaseCreate, current_user: UserOut = Depends(get_current_user)):
+    if not body.title.strip():
+        raise HTTPException(400, "عنوان القضية مطلوب")
+    _validate_case_status(body.status)
+    case_obj = Case(**{**body.model_dump(), "title": body.title.strip()})
+    doc = case_obj.model_dump()
+    doc["user_id"] = current_user.id
+    await db.cases.insert_one(doc)
+    return case_obj
+
+
+@api.patch("/cases/{case_id}", response_model=Case)
+async def update_case(case_id: str, body: CaseUpdate, current_user: UserOut = Depends(get_current_user)):
+    doc = await db.cases.find_one({"id": case_id, "user_id": current_user.id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Case not found")
+
+    updates = body.model_dump(exclude_unset=True)
+    _validate_case_status(updates.get("status"))
+    if "title" in updates:
+        updates["title"] = (updates["title"] or "").strip()
+        if not updates["title"]:
+            raise HTTPException(400, "عنوان القضية مطلوب")
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    await db.cases.update_one({"id": case_id, "user_id": current_user.id}, {"$set": updates})
+    doc.update(updates)
+    return doc
+
+
+@api.delete("/cases/{case_id}")
+async def delete_case(case_id: str, current_user: UserOut = Depends(get_current_user)):
+    res = await db.cases.delete_one({"id": case_id, "user_id": current_user.id})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Case not found")
+    return {"ok": True}
+
+
 @api.post("/chat", response_model=Message)
 async def send_message(body: SendMessageBody, current_user: UserOut = Depends(get_current_user)):
     logger.info("POST /api/chat chat_id=%s user=%s use_local=%s use_azure=%s use_finetuned=%s", body.chat_id, current_user.id, body.use_local, body.use_azure, body.use_finetuned)
@@ -1690,7 +1834,8 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
 
     if reply_text is None and GEMINI_API_KEY:
         try:
-            reply_text = await _call_gemini_rag(model_history)
+            cases_context = await _build_cases_context(current_user.id)
+            reply_text = await _call_gemini_rag(model_history, cases_context)
             if reply_text is not None:
                 source = "gemini_rag"
                 logger.info("Reply selected from Gemini RAG chat_id=%s user=%s", body.chat_id, current_user.id)
@@ -1863,7 +2008,8 @@ async def send_message_stream(body: SendMessageBody, current_user: UserOut = Dep
             if use_local_now:
                 gen = _stream_local(model_history)
             elif use_gemini_now:
-                gen = _stream_gemini_rag(model_history)
+                cases_context = await _build_cases_context(current_user.id)
+                gen = _stream_gemini_rag(model_history, cases_context)
             elif use_finetuned_now:
                 gen = _stream_finetuned(model_history)
             else:

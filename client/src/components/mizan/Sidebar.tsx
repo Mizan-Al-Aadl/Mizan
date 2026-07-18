@@ -1,4 +1,4 @@
-import { Plus, Scale, Trash2, MessageSquare, X, Edit3, LogOut } from "lucide-react";
+import { Plus, Scale, Trash2, MessageSquare, X, Edit3, LogOut, Briefcase } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useState } from "react";
 import type { Chat } from "@/types";
@@ -88,7 +88,7 @@ export default function Sidebar({
         </div>
 
         {/* New chat button */}
-        <div className="p-4">
+        <div className="p-4 space-y-2">
           <button
             data-testid="new-chat-btn"
             onClick={onNew}
@@ -97,6 +97,14 @@ export default function Sidebar({
             <Plus className="w-4 h-4" />
             محادثة جديدة
           </button>
+          <Link
+            to="/cases"
+            data-testid="cases-link"
+            className="btn btn-outline btn-primary w-full rounded-xl font-cairo"
+          >
+            <Briefcase className="w-4 h-4" />
+            قضاياي
+          </Link>
         </div>
 
         {/* Chat list */}
