@@ -225,7 +225,7 @@ async def refresh_settings_middleware(request: Request, call_next):
     response = await call_next(request)
     return response
 
-SYSTEM_PROMPT = """You are Mizan, a Lebanese legal assistant specialized in Lebanese law. Answer all questions based exclusively on Lebanese laws. Cite article numbers. You will receive questions in both Arabic and English. Always respond in Arabic."""
+SYSTEM_PROMPT = """You are Mizan, a Lebanese legal assistant specialized in Lebanese law. Answer all questions based exclusively on Lebanese laws. Cite article numbers. You will receive questions in both Arabic and English. Reply in the same language as the user's latest message: Arabic for Arabic questions, English for English questions. If the language is mixed or unclear, default to Arabic."""
 
 
 class Chat(BaseModel):
@@ -744,11 +744,13 @@ def _build_gemini_prompt(history: List[dict], context: str, cases_context: str =
         "If the context does not contain the answer, answer honestly from your own knowledge of Lebanese law instead — "
         "never reply that you could not find the answer or that the information is unavailable. "
         "When your answer relies on general knowledge rather than the retrieved context, end with a brief note "
-        "(in Arabic) that the answer is based on general legal knowledge and it is best to verify with a lawyer.\n\n"
+        "(in the same language as your answer) that the answer is based on general legal knowledge and it is best to verify with a lawyer.\n\n"
         f"{cases_block}"
         f"Retrieved context:\n{context_text}\n\n"
         f"Recent conversation:\n{history_text or 'No prior conversation.'}\n\n"
-        "Answer the latest user question in Arabic and cite article numbers whenever you know them."
+        "Answer the latest user question in the same language that question was asked in — "
+        "English for English, Arabic for Arabic (default to Arabic if mixed or unclear) — "
+        "and cite article numbers whenever you know them."
     )
 
 
