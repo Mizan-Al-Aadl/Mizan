@@ -1,4 +1,6 @@
 ﻿import csv
+import io
+import math
 import os
 import sys
 import json
@@ -168,6 +170,7 @@ _llm_instance = None
 _llm_lock = asyncio.Lock()
 _law_dataset_cache: Optional[List[dict]] = None
 _law_token_index: dict = {}
+_law_avgdl: float = 1.0
 _law_dataset_lock = threading.Lock()
 
 client = AsyncIOMotorClient(
@@ -232,6 +235,7 @@ class Chat(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     title: str = "محادثة جديدة"
+    case_id: Optional[str] = None  # set when the chat is scoped to one case
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -345,6 +349,7 @@ async def _create_guest_user() -> UserOut:
 
 class ChatCreate(BaseModel):
     title: Optional[str] = None
+    case_id: Optional[str] = None
 
 
 class ChatUpdate(BaseModel):
@@ -363,6 +368,32 @@ CASE_STATUSES = {"pending", "won", "lost"}
 CASE_STATUS_LABELS = {"pending": "قيد النظر", "won": "رابحة", "lost": "خاسرة"}
 
 
+class Hearing(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    date: str  # ISO date "YYYY-MM-DD"
+    note: str = ""
+    outcome: str = ""
+
+
+class HearingCreate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    date: str
+    note: str = ""
+    outcome: str = ""
+
+
+class CaseDocumentOut(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    case_id: str
+    filename: str
+    mime_type: str
+    size: int
+    has_text: bool = False
+    created_at: str
+
+
 class Case(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -375,6 +406,7 @@ class Case(BaseModel):
     next_hearing_date: Optional[str] = None  # ISO date "YYYY-MM-DD"
     reply_memo_done: bool = False  # لائحة جوابية
     notes: str = ""
+    hearings: List[Hearing] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -410,38 +442,141 @@ def _validate_case_status(status: Optional[str]) -> None:
         raise HTTPException(400, "حالة القضية يجب أن تكون: pending أو won أو lost")
 
 
-async def _build_cases_context(user_id: str) -> str:
+CASE_DOC_TEXT_MAX_CHARS = 20000  # extracted text stored per document
+CASE_DOC_CONTEXT_MAX_CHARS = 6000  # document text included in a scoped chat
+CASE_DOC_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _extract_case_document_text(filename: str, mime_type: str, data: bytes) -> str:
+    """Best-effort text extraction so the chatbot can read case documents.
+    Unsupported/scanned files simply yield no text — the file is still stored."""
+    name = (filename or "").lower()
+    try:
+        if name.endswith(".pdf") or "pdf" in (mime_type or ""):
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(data))
+            text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        elif name.endswith(".docx"):
+            from docx import Document as DocxDocument
+
+            text = "\n".join(p.text for p in DocxDocument(io.BytesIO(data)).paragraphs)
+        elif name.endswith((".txt", ".md", ".csv")):
+            text = data.decode("utf-8", errors="ignore")
+        else:
+            return ""
+        return re.sub(r"\n{3,}", "\n\n", text).strip()[:CASE_DOC_TEXT_MAX_CHARS]
+    except Exception as e:
+        logger.warning("Text extraction failed for %s: %s", filename, e)
+        return ""
+
+
+def _case_document_path(case_id: str, doc_id: str, original_filename: str) -> Path:
+    case_dir = UPLOADS_DIR / "cases" / case_id
+    case_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = os.path.basename(original_filename or "document")
+    return case_dir / f"{doc_id}_{safe_name}"
+
+
+def _resolve_case_document_file(case_id: str, doc_id: str) -> Optional[Path]:
+    case_dir = UPLOADS_DIR / "cases" / case_id
+    if not case_dir.is_dir():
+        return None
+    for candidate in case_dir.glob(f"{doc_id}_*"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _format_case_lines(doc: dict, idx: Optional[int] = None) -> str:
+    parts = [f"{f'[{idx}] ' if idx else ''}القضية: {doc.get('title', '')}"]
+    if doc.get("case_number"):
+        parts.append(f"رقم القضية: {doc['case_number']}")
+    if doc.get("court"):
+        parts.append(f"المحكمة: {doc['court']}")
+    if doc.get("client_name"):
+        parts.append(f"الموكّل: {doc['client_name']}")
+    if doc.get("opponent_name"):
+        parts.append(f"الخصم: {doc['opponent_name']}")
+    parts.append(f"الحالة: {CASE_STATUS_LABELS.get(doc.get('status', 'pending'), doc.get('status', ''))}")
+    if doc.get("next_hearing_date"):
+        parts.append(f"موعد الجلسة القادمة: {doc['next_hearing_date']}")
+    parts.append(f"اللائحة الجوابية: {'جاهزة' if doc.get('reply_memo_done') else 'غير جاهزة بعد'}")
+    if doc.get("notes"):
+        parts.append(f"ملاحظات: {doc['notes']}")
+    return " | ".join(parts)
+
+
+def _format_hearings_lines(hearings: List[dict]) -> str:
+    lines = []
+    for h in sorted(hearings, key=lambda h: h.get("date") or ""):
+        line = f"  - جلسة بتاريخ {h.get('date', '؟')}"
+        if h.get("outcome"):
+            line += f" — النتيجة: {h['outcome']}"
+        if h.get("note"):
+            line += f" — ملاحظة: {h['note']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+async def _build_cases_context(user_id: str, case_id: Optional[str] = None) -> str:
     """Format the lawyer's saved cases as a context block for the model so it
-    can answer questions like "متى جلستي القادمة؟" about their own cases."""
+    can answer questions like "متى جلستي القادمة؟" about their own cases.
+
+    When case_id is set (chat opened from a specific case), only that case is
+    included — in full detail, with its hearing history and the extracted text
+    of its uploaded documents."""
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    if case_id:
+        doc = await db.cases.find_one({"id": case_id, "user_id": user_id}, {"_id": 0})
+        if not doc:
+            return ""
+        sections = [f"تاريخ اليوم: {today}", "هذه المحادثة مخصّصة للقضية التالية:", _format_case_lines(doc)]
+        if doc.get("hearings"):
+            sections.append("سجل الجلسات:\n" + _format_hearings_lines(doc["hearings"]))
+
+        file_docs = await db.case_documents.find({"case_id": case_id, "user_id": user_id}, {"_id": 0}).to_list(50)
+        remaining = CASE_DOC_CONTEXT_MAX_CHARS
+        for file_doc in file_docs:
+            text = (file_doc.get("text") or "").strip()
+            header = f"مستند مرفق: {file_doc.get('filename', '')}"
+            if not text:
+                sections.append(f"{header} (لم يتم استخراج نص منه)")
+                continue
+            if remaining <= 0:
+                sections.append(f"{header} (تم تجاوز الحد الأقصى للنص)")
+                continue
+            snippet = text[:remaining]
+            remaining -= len(snippet)
+            sections.append(f"{header}:\n{snippet}")
+        return "\n\n".join(sections)
+
     docs = await db.cases.find({"user_id": user_id}, {"_id": 0}).to_list(200)
     if not docs:
         return ""
 
     docs.sort(key=lambda d: (d.get("next_hearing_date") is None, d.get("next_hearing_date") or ""))
 
+    doc_names: dict = {}
+    for file_doc in await db.case_documents.find({"user_id": user_id}, {"_id": 0, "case_id": 1, "filename": 1}).to_list(500):
+        doc_names.setdefault(file_doc["case_id"], []).append(file_doc.get("filename", ""))
+
     lines: List[str] = []
     for idx, doc in enumerate(docs, start=1):
-        parts = [f"[{idx}] القضية: {doc.get('title', '')}"]
-        if doc.get("case_number"):
-            parts.append(f"رقم القضية: {doc['case_number']}")
-        if doc.get("court"):
-            parts.append(f"المحكمة: {doc['court']}")
-        if doc.get("client_name"):
-            parts.append(f"الموكّل: {doc['client_name']}")
-        if doc.get("opponent_name"):
-            parts.append(f"الخصم: {doc['opponent_name']}")
-        parts.append(f"الحالة: {CASE_STATUS_LABELS.get(doc.get('status', 'pending'), doc.get('status', ''))}")
-        if doc.get("next_hearing_date"):
-            parts.append(f"موعد الجلسة القادمة: {doc['next_hearing_date']}")
-        parts.append(f"اللائحة الجوابية: {'جاهزة' if doc.get('reply_memo_done') else 'غير جاهزة بعد'}")
-        if doc.get("notes"):
-            parts.append(f"ملاحظات: {doc['notes']}")
-        lines.append(" | ".join(parts))
+        line = _format_case_lines(doc, idx)
+        if doc.get("hearings"):
+            line += f" | عدد الجلسات المسجّلة: {len(doc['hearings'])}"
+        names = doc_names.get(doc.get("id", ""), [])
+        if names:
+            line += f" | مستندات مرفقة: {', '.join(names[:5])}"
+        lines.append(line)
+        if doc.get("hearings"):
+            lines.append(_format_hearings_lines(doc["hearings"]))
 
     block = "\n".join(lines)
-    if len(block) > 4000:
-        block = block[:4000].rstrip()
-    today = datetime.now(timezone.utc).date().isoformat()
+    if len(block) > 5000:
+        block = block[:5000].rstrip()
     return f"تاريخ اليوم: {today}\nقضايا المحامي المسجّلة في النظام:\n{block}"
 
 
@@ -474,12 +609,41 @@ def _resolve_law_dataset_path() -> Path:
     return path
 
 
+# Arabic normalization: strip diacritics/tatweel and fold letter variants so
+# "\u0627\u0644\u0645\u064F\u0648\u0638\u064E\u0651\u0641" matches "\u0627\u0644\u0645\u0648\u0638\u0641" and "\u0623\u062C\u0631\u0629" matches "\u0627\u062C\u0631\u0647".
+_ARABIC_DIACRITICS_RE = re.compile("[\u064B-\u0652\u0670\u0640]")
+_ARABIC_CHAR_FOLD = str.maketrans({
+    "\u0623": "\u0627", "\u0625": "\u0627", "\u0622": "\u0627", "\u0671": "\u0627",
+    "\u0649": "\u064A", "\u0626": "\u064A", "\u0624": "\u0648", "\u0629": "\u0647",
+})
+
+
 def _normalize_rag_text(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").lower()).strip()
+    text = _ARABIC_DIACRITICS_RE.sub("", (text or "").lower())
+    text = text.translate(_ARABIC_CHAR_FOLD)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# Conservative light stemming (\u00E0 la Light10): strip one definite-article-style
+# prefix and one common suffix, only when a stem of >= 3 chars remains.
+_ARABIC_PREFIXES = ("\u0648\u0627\u0644", "\u0641\u0627\u0644", "\u0628\u0627\u0644", "\u0643\u0627\u0644", "\u0644\u0644", "\u0627\u0644")
+_ARABIC_SUFFIXES = ("\u062A\u0647\u0627", "\u0627\u062A", "\u0627\u0646", "\u0648\u0646", "\u064A\u0646", "\u0647\u0627", "\u064A\u0647", "\u064A\u0629")
+
+
+def _light_stem_arabic(token: str) -> str:
+    for prefix in _ARABIC_PREFIXES:
+        if token.startswith(prefix) and len(token) - len(prefix) >= 3:
+            token = token[len(prefix):]
+            break
+    for suffix in _ARABIC_SUFFIXES:
+        if token.endswith(suffix) and len(token) - len(suffix) >= 3:
+            token = token[: -len(suffix)]
+            break
+    return token
 
 
 def _tokenize_rag_text(text: str) -> List[str]:
-    return re.findall(r"[\u0600-\u06FF\w]+", _normalize_rag_text(text))
+    return [_light_stem_arabic(t) for t in re.findall(r"[\u0600-\u06FF\w]+", _normalize_rag_text(text))]
 
 
 def _convert_xlsx_to_csv(xlsx_path: Path, csv_path: Path) -> None:
@@ -549,7 +713,7 @@ def _download_law_dataset(dataset_path: Path) -> bool:
 
 
 def _load_law_dataset() -> List[dict]:
-    global _law_dataset_cache, _law_token_index
+    global _law_dataset_cache, _law_token_index, _law_avgdl
     if _law_dataset_cache is not None:
         return _law_dataset_cache
 
@@ -609,7 +773,8 @@ def _load_law_dataset() -> List[dict]:
                             static_bonus += 8
 
                     position = len(records)
-                    for token in set(_tokenize_rag_text(combined_text)):
+                    unique_tokens = set(_tokenize_rag_text(combined_text))
+                    for token in unique_tokens:
                         token_index.setdefault(sys.intern(token), array("I")).append(position)
 
                     records.append(
@@ -618,6 +783,7 @@ def _load_law_dataset() -> List[dict]:
                             "row": {field: str(row.get(field, "") or "") for field in row_fields},
                             "type": record_type,
                             "text_len": len(combined_text),
+                            "doc_len": len(unique_tokens),
                             "normalized": normalized_text,
                             "static_bonus": static_bonus,
                             "match_fields": tuple(
@@ -632,6 +798,7 @@ def _load_law_dataset() -> List[dict]:
             token_index = {}
 
         _law_token_index = token_index
+        _law_avgdl = (sum(r["doc_len"] for r in records) / len(records)) if records else 1.0
         _law_dataset_cache = records
         logger.info("Loaded %d law dataset rows from %s", len(records), dataset_path)
         return _law_dataset_cache
@@ -645,21 +812,31 @@ def _retrieve_law_context(query_text: str, top_k: int) -> List[dict]:
     normalized_query = _normalize_rag_text(query_text)
     query_tokens = set(_tokenize_rag_text(normalized_query))
 
-    # Token overlap per record via the inverted index — equal to
-    # len(query_tokens & record_tokens) in the old per-record-set version.
-    overlap_counts: dict = {}
+    # BM25 (binary term frequency — the index stores presence only) over the
+    # inverted index: rare legal terms outweigh filler words, and long records
+    # no longer win just by containing more tokens.
+    k1, b = 1.5, 0.75
+    n_docs = len(records)
+    bm25_scores: dict = {}
     for token in query_tokens:
-        for position in _law_token_index.get(token, ()):
-            overlap_counts[position] = overlap_counts.get(position, 0) + 1
+        positions = _law_token_index.get(token)
+        if not positions:
+            continue
+        df = len(positions)
+        idf = math.log(1.0 + (n_docs - df + 0.5) / (df + 0.5))
+        for position in positions:
+            doc_len = records[position]["doc_len"]
+            length_norm = k1 * (1.0 - b + b * doc_len / _law_avgdl)
+            bm25_scores[position] = bm25_scores.get(position, 0.0) + idf * (k1 + 1.0) / (1.0 + length_norm)
 
     scored_records = []
     for position, record in enumerate(records):
-        score = overlap_counts.get(position, 0) + record["static_bonus"]
+        score = bm25_scores.get(position, 0.0) + record["static_bonus"]
         if normalized_query and normalized_query in record["normalized"]:
-            score += 12
+            score += 25
         for value in record["match_fields"]:
             if value and value in normalized_query:
-                score += 3
+                score += 6
         scored_records.append((score, record))
 
     scored_records.sort(key=lambda item: (item[0], item[1]["text_len"]), reverse=True)
@@ -1694,8 +1871,15 @@ async def debug_azure_test():
 
 @api.post("/chats", response_model=Chat)
 async def create_chat(body: ChatCreate, current_user: UserOut = Depends(get_current_user)):
-    logger.info("POST /api/chats title=%s user=%s", body.title or "<default>", current_user.id)
-    chat_obj = Chat(title=body.title or "محادثة جديدة")
+    logger.info("POST /api/chats title=%s case_id=%s user=%s", body.title or "<default>", body.case_id, current_user.id)
+    title = body.title
+    if body.case_id:
+        case_doc = await db.cases.find_one({"id": body.case_id, "user_id": current_user.id}, {"_id": 0})
+        if not case_doc:
+            raise HTTPException(404, "Case not found")
+        if not title:
+            title = f"قضية: {case_doc.get('title', '')}"[:60]
+    chat_obj = Chat(title=title or "محادثة جديدة", case_id=body.case_id)
     chat_data = chat_obj.model_dump()
     chat_data["user_id"] = current_user.id
     await db.chats.insert_one(chat_data)
@@ -1797,6 +1981,126 @@ async def delete_case(case_id: str, current_user: UserOut = Depends(get_current_
     res = await db.cases.delete_one({"id": case_id, "user_id": current_user.id})
     if res.deleted_count == 0:
         raise HTTPException(404, "Case not found")
+    await db.case_documents.delete_many({"case_id": case_id, "user_id": current_user.id})
+    case_dir = UPLOADS_DIR / "cases" / case_id
+    if case_dir.is_dir():
+        for f in case_dir.glob("*"):
+            with contextlib.suppress(OSError):
+                f.unlink()
+        with contextlib.suppress(OSError):
+            case_dir.rmdir()
+    return {"ok": True}
+
+
+# ── Hearings ──
+
+@api.post("/cases/{case_id}/hearings", response_model=Case)
+async def add_hearing(case_id: str, body: HearingCreate, current_user: UserOut = Depends(get_current_user)):
+    doc = await db.cases.find_one({"id": case_id, "user_id": current_user.id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Case not found")
+    if not body.date.strip():
+        raise HTTPException(400, "تاريخ الجلسة مطلوب")
+
+    hearing = Hearing(date=body.date.strip(), note=body.note.strip(), outcome=body.outcome.strip())
+    updated_at = datetime.now(timezone.utc).isoformat()
+    await db.cases.update_one(
+        {"id": case_id, "user_id": current_user.id},
+        {"$push": {"hearings": hearing.model_dump()}, "$set": {"updated_at": updated_at}},
+    )
+    doc.setdefault("hearings", []).append(hearing.model_dump())
+    doc["updated_at"] = updated_at
+    return doc
+
+
+@api.delete("/cases/{case_id}/hearings/{hearing_id}", response_model=Case)
+async def delete_hearing(case_id: str, hearing_id: str, current_user: UserOut = Depends(get_current_user)):
+    doc = await db.cases.find_one({"id": case_id, "user_id": current_user.id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Case not found")
+    hearings = [h for h in doc.get("hearings", []) if h.get("id") != hearing_id]
+    if len(hearings) == len(doc.get("hearings", [])):
+        raise HTTPException(404, "Hearing not found")
+
+    updated_at = datetime.now(timezone.utc).isoformat()
+    await db.cases.update_one(
+        {"id": case_id, "user_id": current_user.id},
+        {"$set": {"hearings": hearings, "updated_at": updated_at}},
+    )
+    doc["hearings"] = hearings
+    doc["updated_at"] = updated_at
+    return doc
+
+
+# ── Case documents ──
+
+@api.post("/cases/{case_id}/documents", response_model=CaseDocumentOut)
+async def upload_case_document(
+    case_id: str,
+    file: UploadFile = File(...),
+    current_user: UserOut = Depends(get_current_user),
+):
+    case_doc = await db.cases.find_one({"id": case_id, "user_id": current_user.id}, {"_id": 0})
+    if not case_doc:
+        raise HTTPException(404, "Case not found")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "الملف فارغ")
+    if len(data) > CASE_DOC_MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "حجم الملف يتجاوز الحد الأقصى (10MB)")
+
+    doc_id = str(uuid.uuid4())
+    filename = os.path.basename(file.filename or "document")
+    mime_type = file.content_type or "application/octet-stream"
+    text = await asyncio.to_thread(_extract_case_document_text, filename, mime_type, data)
+    _case_document_path(case_id, doc_id, filename).write_bytes(data)
+
+    record = {
+        "id": doc_id,
+        "case_id": case_id,
+        "user_id": current_user.id,
+        "filename": filename,
+        "mime_type": mime_type,
+        "size": len(data),
+        "text": text,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.case_documents.insert_one(dict(record))
+    return CaseDocumentOut(**record, has_text=bool(text))
+
+
+@api.get("/cases/{case_id}/documents", response_model=List[CaseDocumentOut])
+async def list_case_documents(case_id: str, current_user: UserOut = Depends(get_current_user)):
+    case_doc = await db.cases.find_one({"id": case_id, "user_id": current_user.id}, {"_id": 0})
+    if not case_doc:
+        raise HTTPException(404, "Case not found")
+    docs = await db.case_documents.find({"case_id": case_id, "user_id": current_user.id}, {"_id": 0}).sort("created_at", 1).to_list(100)
+    return [CaseDocumentOut(**d, has_text=bool(d.get("text"))) for d in docs]
+
+
+@api.get("/cases/{case_id}/documents/{doc_id}")
+async def download_case_document(case_id: str, doc_id: str, current_user: UserOut = Depends(get_current_user)):
+    record = await db.case_documents.find_one(
+        {"id": doc_id, "case_id": case_id, "user_id": current_user.id}, {"_id": 0}
+    )
+    if not record:
+        raise HTTPException(404, "Document not found")
+    path = _resolve_case_document_file(case_id, doc_id)
+    if not path:
+        raise HTTPException(404, "Document file missing on server")
+    return FileResponse(path, media_type=record.get("mime_type", "application/octet-stream"), filename=record.get("filename", "document"))
+
+
+@api.delete("/cases/{case_id}/documents/{doc_id}")
+async def delete_case_document(case_id: str, doc_id: str, current_user: UserOut = Depends(get_current_user)):
+    res = await db.case_documents.delete_one({"id": doc_id, "case_id": case_id, "user_id": current_user.id})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Document not found")
+    path = _resolve_case_document_file(case_id, doc_id)
+    if path:
+        with contextlib.suppress(OSError):
+            path.unlink()
     return {"ok": True}
 
 
@@ -1836,7 +2140,7 @@ async def send_message(body: SendMessageBody, current_user: UserOut = Depends(ge
 
     if reply_text is None and GEMINI_API_KEY:
         try:
-            cases_context = await _build_cases_context(current_user.id)
+            cases_context = await _build_cases_context(current_user.id, chat.get("case_id"))
             reply_text = await _call_gemini_rag(model_history, cases_context)
             if reply_text is not None:
                 source = "gemini_rag"
@@ -2010,7 +2314,7 @@ async def send_message_stream(body: SendMessageBody, current_user: UserOut = Dep
             if use_local_now:
                 gen = _stream_local(model_history)
             elif use_gemini_now:
-                cases_context = await _build_cases_context(current_user.id)
+                cases_context = await _build_cases_context(current_user.id, chat.get("case_id"))
                 gen = _stream_gemini_rag(model_history, cases_context)
             elif use_finetuned_now:
                 gen = _stream_finetuned(model_history)

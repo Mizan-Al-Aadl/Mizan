@@ -5,6 +5,7 @@ import { z } from "zod";
 export const ChatSchema = z.object({
   id: z.string(),
   title: z.string(),
+  case_id: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
 });
@@ -28,6 +29,21 @@ export const MessageSchema = z.object({
   created_at: z.string(),
 });
 
+export const HearingSchema = z.object({
+  id: z.string(),
+  date: z.string(),
+  note: z.string(),
+  outcome: z.string(),
+});
+
+export type Hearing = z.infer<typeof HearingSchema>;
+
+export type HearingInput = {
+  date: string;
+  note?: string;
+  outcome?: string;
+};
+
 export const CaseSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -39,9 +55,22 @@ export const CaseSchema = z.object({
   next_hearing_date: z.string().nullable().optional(),
   reply_memo_done: z.boolean(),
   notes: z.string(),
+  hearings: z.array(HearingSchema),
   created_at: z.string(),
   updated_at: z.string(),
 });
+
+export const CaseDocumentSchema = z.object({
+  id: z.string(),
+  case_id: z.string(),
+  filename: z.string(),
+  mime_type: z.string(),
+  size: z.number(),
+  has_text: z.boolean(),
+  created_at: z.string(),
+});
+
+export type CaseDocument = z.infer<typeof CaseDocumentSchema>;
 
 export type Case = z.infer<typeof CaseSchema>;
 export type CaseStatus = Case["status"];

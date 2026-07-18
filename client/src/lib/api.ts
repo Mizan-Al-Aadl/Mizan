@@ -2,9 +2,12 @@ import { z } from "zod";
 import { getToken } from "./auth.ts";
 import {
   Case,
+  CaseDocument,
+  CaseDocumentSchema,
   CaseInput,
   CaseSchema,
   Chat,
+  HearingInput,
   ChatSchema,
   Message,
   MessageSchema,
@@ -124,10 +127,13 @@ export const apiGetMe = (): Promise<User> =>
 export const listChats = (): Promise<Chat[]> =>
   apiFetch("/chats", z.array(ChatSchema));
 
-export const createChat = (title?: string): Promise<Chat> =>
+export const createChat = (title?: string, caseId?: string): Promise<Chat> =>
   apiFetch("/chats", ChatSchema, {
     method: "POST",
-    body: JSON.stringify(title ? { title } : {}),
+    body: JSON.stringify({
+      ...(title ? { title } : {}),
+      ...(caseId ? { case_id: caseId } : {}),
+    }),
   });
 
 export const deleteChat = (id: string): Promise<{ ok: boolean }> =>
@@ -165,6 +171,65 @@ export const deleteCase = (id: string): Promise<{ ok: boolean }> =>
   apiFetch(`/cases/${id}`, z.object({ ok: z.boolean() }), {
     method: "DELETE",
   });
+
+// ─── Hearings ─────────────────────────────────────────────────────────────────
+
+export const addHearing = (caseId: string, input: HearingInput): Promise<Case> =>
+  apiFetch(`/cases/${caseId}/hearings`, CaseSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+export const deleteHearing = (caseId: string, hearingId: string): Promise<Case> =>
+  apiFetch(`/cases/${caseId}/hearings/${hearingId}`, CaseSchema, {
+    method: "DELETE",
+  });
+
+// ─── Case documents ───────────────────────────────────────────────────────────
+
+export const listCaseDocuments = (caseId: string): Promise<CaseDocument[]> =>
+  apiFetch(`/cases/${caseId}/documents`, z.array(CaseDocumentSchema));
+
+export async function uploadCaseDocument(caseId: string, file: File): Promise<CaseDocument> {
+  const form = new FormData();
+  form.append("file", file);
+
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${BASE}/cases/${caseId}/documents`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(buildApiErrorMessage(res.status, body));
+  }
+  return CaseDocumentSchema.parse(await res.json());
+}
+
+export const deleteCaseDocument = (caseId: string, docId: string): Promise<{ ok: boolean }> =>
+  apiFetch(`/cases/${caseId}/documents/${docId}`, z.object({ ok: z.boolean() }), {
+    method: "DELETE",
+  });
+
+export async function openCaseDocument(caseId: string, docId: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${BASE}/cases/${caseId}/documents/${docId}`, { headers });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(buildApiErrorMessage(res.status, body));
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank", "noopener,noreferrer");
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
 
 // ─── Document analysis ────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
   Plus,
@@ -68,6 +68,7 @@ export default function MizanApp() {
 
   const { logout } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const scrollRef = useRef<HTMLDivElement>(null);
   const skipNextLoadRef = useRef(false);
   const activeLoadIdRef = useRef(0);
@@ -88,7 +89,16 @@ export default function MizanApp() {
   };
 
   useEffect(() => {
-    void refreshChats();
+    void (async () => {
+      const data = await refreshChats();
+      // Deep link from the cases page: /app?chat=<id> opens that chat directly.
+      const target = searchParams.get("chat");
+      if (target && data.some((c) => c.id === target)) {
+        handleChatSelect(target);
+        setSearchParams({}, { replace: true });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const resetChatUi = () => {
