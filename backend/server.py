@@ -391,6 +391,8 @@ class CaseDocumentOut(BaseModel):
     mime_type: str
     size: int
     has_text: bool = False
+    analysis: Optional[str] = None
+    analyzed_at: Optional[str] = None
     created_at: str
 
 
@@ -2090,6 +2092,68 @@ async def download_case_document(case_id: str, doc_id: str, current_user: UserOu
     if not path:
         raise HTTPException(404, "Document file missing on server")
     return FileResponse(path, media_type=record.get("mime_type", "application/octet-stream"), filename=record.get("filename", "document"))
+
+
+DOCUMENT_ANALYSIS_PROMPT = (
+    "أنت مساعد قانوني لبناني خبير. حلّل المستند المرفق من حيث قوّته القانونية ضمن سياق القضية الموضحة أدناه.\n"
+    "قدّم التحليل بالعربية وبشكل منظّم تحت العناوين التالية:\n"
+    "1. ملخص موجز للمستند\n"
+    "2. نقاط القوة القانونية\n"
+    "3. نقاط الضعف والثغرات\n"
+    "4. المخاطر المحتملة على موقف الموكّل\n"
+    "5. تقييم عام لقوة المستند (قوي / متوسط / ضعيف) مع التعليل\n"
+    "6. اقتراحات عملية لتعزيز الموقف القانوني\n"
+    "استند إلى القوانين اللبنانية واذكر أرقام المواد عند معرفتها.\n\n"
+    "سياق القضية:\n{case_context}"
+)
+
+
+@api.post("/cases/{case_id}/documents/{doc_id}/analyze", response_model=CaseDocumentOut)
+async def analyze_case_document(case_id: str, doc_id: str, current_user: UserOut = Depends(get_current_user)):
+    case_doc = await db.cases.find_one({"id": case_id, "user_id": current_user.id}, {"_id": 0})
+    if not case_doc:
+        raise HTTPException(404, "Case not found")
+    record = await db.case_documents.find_one(
+        {"id": doc_id, "case_id": case_id, "user_id": current_user.id}, {"_id": 0}
+    )
+    if not record:
+        raise HTTPException(404, "Document not found")
+    if not GEMINI_API_KEY:
+        raise HTTPException(503, "خدمة التحليل غير مهيأة على الخادم (Gemini API)")
+
+    question = DOCUMENT_ANALYSIS_PROMPT.format(case_context=_format_case_lines(case_doc))
+
+    # Prefer the extracted text (works for every format we can read); fall back
+    # to sending the raw file inline for formats Gemini accepts natively (PDF).
+    text = (record.get("text") or "").strip()
+    if text:
+        file_bytes = text.encode("utf-8")
+        mime_type = "text/plain"
+    else:
+        path = _resolve_case_document_file(case_id, doc_id)
+        if not path:
+            raise HTTPException(404, "Document file missing on server")
+        mime_type = record.get("mime_type") or "application/octet-stream"
+        if record.get("filename", "").lower().endswith(".docx") or "wordprocessingml" in mime_type:
+            raise HTTPException(400, "تعذّر استخراج نص من ملف Word هذا، فلا يمكن تحليله")
+        file_bytes = path.read_bytes()
+
+    logger.info("Analyzing case document %s (case=%s, user=%s, mime=%s)", doc_id, case_id, current_user.id, mime_type)
+    try:
+        analysis = await _call_gemini_document(question, file_bytes, mime_type)
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    if not analysis:
+        raise HTTPException(503, "لم يُرجِع المساعد أي تحليل. يرجى المحاولة مرة أخرى.")
+
+    analyzed_at = datetime.now(timezone.utc).isoformat()
+    await db.case_documents.update_one(
+        {"id": doc_id, "case_id": case_id, "user_id": current_user.id},
+        {"$set": {"analysis": analysis, "analyzed_at": analyzed_at}},
+    )
+    record["analysis"] = analysis
+    record["analyzed_at"] = analyzed_at
+    return CaseDocumentOut(**record, has_text=bool(record.get("text")))
 
 
 @api.delete("/cases/{case_id}/documents/{doc_id}")

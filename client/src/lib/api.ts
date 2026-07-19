@@ -210,6 +210,11 @@ export async function uploadCaseDocument(caseId: string, file: File): Promise<Ca
   return CaseDocumentSchema.parse(await res.json());
 }
 
+export const analyzeCaseDocument = (caseId: string, docId: string): Promise<CaseDocument> =>
+  apiFetch(`/cases/${caseId}/documents/${docId}/analyze`, CaseDocumentSchema, {
+    method: "POST",
+  });
+
 export const deleteCaseDocument = (caseId: string, docId: string): Promise<{ ok: boolean }> =>
   apiFetch(`/cases/${caseId}/documents/${docId}`, z.object({ ok: z.boolean() }), {
     method: "DELETE",

@@ -17,6 +17,7 @@ import {
   MessageSquare,
   AlertTriangle,
   BellRing,
+  Sparkles,
   Paperclip,
   FileText,
   Upload,
@@ -37,6 +38,7 @@ import {
   uploadCaseDocument,
   deleteCaseDocument,
   openCaseDocument,
+  analyzeCaseDocument,
 } from "@/lib/api";
 import type { Case, CaseDocument, CaseInput, CaseStatus } from "@/types";
 
@@ -108,6 +110,8 @@ function CaseCard({ c, onEdit, onDelete, onPatch, onUpdated }: CaseCardProps) {
   const [hearingNote, setHearingNote] = useState("");
   const [hearingOutcome, setHearingOutcome] = useState("");
   const [addingHearing, setAddingHearing] = useState(false);
+  const [analyzingDocId, setAnalyzingDocId] = useState<string | null>(null);
+  const [openAnalysisId, setOpenAnalysisId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const days = c.next_hearing_date ? daysUntil(c.next_hearing_date) : null;
@@ -180,6 +184,20 @@ function CaseCard({ c, onEdit, onDelete, onPatch, onUpdated }: CaseCardProps) {
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleAnalyzeDoc = async (docId: string) => {
+    setAnalyzingDocId(docId);
+    try {
+      const updated = await analyzeCaseDocument(c.id, docId);
+      setDocs((prev) => (prev ?? []).map((d) => (d.id === docId ? updated : d)));
+      setOpenAnalysisId(docId);
+      toast.success("اكتمل تحليل المستند");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "تعذّر تحليل المستند");
+    } finally {
+      setAnalyzingDocId(null);
     }
   };
 
@@ -419,37 +437,91 @@ function CaseCard({ c, onEdit, onDelete, onPatch, onUpdated }: CaseCardProps) {
             ) : (
               <ul className="mb-3 space-y-2">
                 {docs.map((d) => (
-                  <li
-                    key={d.id}
-                    className="flex items-center gap-2 text-sm bg-base-200 rounded-xl px-3 py-2"
-                  >
-                    <FileText className="w-4 h-4 text-gray-400 shrink-0" />
-                    <button
-                      onClick={() =>
-                        void openCaseDocument(c.id, d.id).catch(() =>
-                          toast.error("تعذّر فتح المستند")
-                        )
-                      }
-                      className="flex-1 min-w-0 text-right truncate hover:underline"
-                      title={d.filename}
-                    >
-                      {d.filename}
-                    </button>
-                    {!d.has_text && (
-                      <span
-                        className="badge badge-ghost badge-xs shrink-0"
-                        title="لم يُستخرج نص — المساعد لا يستطيع قراءته"
+                  <li key={d.id} className="text-sm bg-base-200 rounded-xl px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-gray-400 shrink-0" />
+                      <button
+                        onClick={() =>
+                          void openCaseDocument(c.id, d.id).catch(() =>
+                            toast.error("تعذّر فتح المستند")
+                          )
+                        }
+                        className="flex-1 min-w-0 text-right truncate hover:underline"
+                        title={d.filename}
                       >
-                        بدون نص
-                      </span>
+                        {d.filename}
+                      </button>
+                      {!d.has_text && (
+                        <span
+                          className="badge badge-ghost badge-xs shrink-0"
+                          title="لم يُستخرج نص — المساعد لا يستطيع قراءته"
+                        >
+                          بدون نص
+                        </span>
+                      )}
+                      <button
+                        data-testid={`analyze-doc-${d.id}`}
+                        onClick={() => void handleAnalyzeDoc(d.id)}
+                        disabled={analyzingDocId !== null}
+                        className="btn btn-primary btn-outline btn-xs rounded-lg gap-1 shrink-0"
+                        title="تحليل قوة المستند القانونية"
+                      >
+                        {analyzingDocId === d.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-3.5 h-3.5" />
+                        )}
+                        {d.analysis ? "إعادة التحليل" : "تحليل"}
+                      </button>
+                      {d.analysis && (
+                        <button
+                          data-testid={`toggle-analysis-${d.id}`}
+                          onClick={() =>
+                            setOpenAnalysisId((prev) => (prev === d.id ? null : d.id))
+                          }
+                          className="btn btn-ghost btn-xs btn-square shrink-0"
+                          aria-label="عرض التحليل"
+                        >
+                          {openAnalysisId === d.id ? (
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          ) : (
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => void handleDeleteDoc(d.id)}
+                        className="btn btn-ghost btn-xs btn-square shrink-0"
+                        aria-label="حذف المستند"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-base-content/50" />
+                      </button>
+                    </div>
+                    {analyzingDocId === d.id && (
+                      <p className="mt-2 text-xs text-gray-400 flex items-center gap-2">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        جارٍ تحليل قوة المستند… قد يستغرق ذلك حتى دقيقة.
+                      </p>
                     )}
-                    <button
-                      onClick={() => void handleDeleteDoc(d.id)}
-                      className="btn btn-ghost btn-xs btn-square shrink-0"
-                      aria-label="حذف المستند"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-base-content/50" />
-                    </button>
+                    {d.analysis && openAnalysisId === d.id && (
+                      <div
+                        data-testid={`analysis-panel-${d.id}`}
+                        className="mt-2 border-t border-black/10 pt-2"
+                      >
+                        <p className="text-xs font-semibold text-primary flex items-center gap-1 mb-1">
+                          <Sparkles className="w-3 h-3" />
+                          تحليل قوة المستند
+                          {d.analyzed_at && (
+                            <span className="font-normal text-gray-400">
+                              ({d.analyzed_at.slice(0, 10)})
+                            </span>
+                          )}
+                        </p>
+                        <p className="whitespace-pre-wrap text-gray-700 leading-relaxed">
+                          {d.analysis}
+                        </p>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

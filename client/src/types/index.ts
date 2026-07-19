@@ -67,6 +67,8 @@ export const CaseDocumentSchema = z.object({
   mime_type: z.string(),
   size: z.number(),
   has_text: z.boolean(),
+  analysis: z.string().nullable().optional(),
+  analyzed_at: z.string().nullable().optional(),
   created_at: z.string(),
 });
 
