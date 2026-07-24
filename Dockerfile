@@ -7,7 +7,6 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 
 COPY backend backend
 COPY chatbot chatbot
-COPY law_dataset.csv law_dataset.csv
 
 WORKDIR /app/backend
 
